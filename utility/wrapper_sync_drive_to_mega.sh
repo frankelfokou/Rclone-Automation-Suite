@@ -5,7 +5,7 @@
 
 # --- CONFIGURAZIONE ---
 TARGET_USER="frankel"
-SCRIPT_PATH="/home/frankel/.personal/rclone_google_drive_sync/rclone_sync.sh"
+SCRIPT_PATH="/home/frankel/.personal/Rclone-Automation-Suite/rclone_sync.sh"
 SCRIPT_ARGS="GDrive-F4Frank: Mega:"
 # ----------------------
 
