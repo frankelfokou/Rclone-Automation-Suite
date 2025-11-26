@@ -1,0 +1,11 @@
+[Desktop Entry]
+# POSITION: /home/frankel/.config/autostart
+Type=Application
+Name=Rclone Sync Login
+Comment=Esegue rclone bisync al login utente
+# "sh -c" ci permette di usare sleep prima dello script
+# sleep 5: dà tempo al desktop di caricare le icone e il server delle notifiche
+Exec=sh -c "sleep 5; /home/frankel/.personal/rclone_google_drive_sync/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true

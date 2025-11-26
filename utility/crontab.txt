@@ -1,0 +1,5 @@
+# Esecuzione standard ogni 15 minuti
+*/10 * * * *  /home/frankel/.personal/rclone_google_drive_sync/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:
+
+# Esecuzione all'avvio (con un ritardo per dare tempo al WiFi di connettersi)
+@reboot sleep 60 && /home/frankel/.personal/rclone_google_drive_sync/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:
