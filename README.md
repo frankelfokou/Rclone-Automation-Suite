@@ -136,3 +136,4 @@ Posizionare lo script in una directory come `/etc/cron.daily/` per l'esecuzione 
 ```bash
 ./test/test_command_rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
 ```
+
