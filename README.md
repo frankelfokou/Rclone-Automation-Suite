@@ -1,22 +1,49 @@
 # `rclone` Synchronization Scripts Guide
 
-This guide explains how a suite of shell scripts designed to automate, manage, and robustly handle file synchronization with `rclone` works.
+Questa guida illustra il funzionamento di una suite di script shell progettata per automatizzare, gestire e rendere robusta la sincronizzazione di file con `rclone`.
 
 ---
 
 ### General Overview
 
-The suite provides solutions for various synchronization scenarios:
+La suite fornisce soluzioni per diversi scenari di sincronizzazione:
 
 1.  **Bidirectional Synchronization (`bisync`)**: Keeps a local and a remote directory perfectly aligned. Ideal for daily work on files that need to be available both locally and in the cloud.
-2.  **Unidirectional Synchronization (`sync`)**: Primarily used for backups from one cloud to another (remote -> remote).
-3.  **Unidirectional Copy (`copy`)**: Utility scripts for manual copy operations (remote -> local or remote -> remote) that respect the global locking system.
+2.  **Unidirectional Synchronization (`sync`)**: Utilizzata principalmente per backup da un cloud a un altro (remoto -> remoto).
+3.  **Unidirectional Copy (`copy`)**: Script di utilità per operazioni di copia manuale (remoto -> locale o remoto -> remoto) che rispettano il sistema di lock globale.
 
-All main scripts share advanced features such as:
-*   **Lock Management**: To prevent multiple executions and conflicts.
-*   **Desktop Notifications**: To report critical errors.
-*   **Logging and Log Rotation**: To track operations and manage disk space.
-*   **Automatic Recovery**: In case of errors, diagnostic and recovery attempts are performed.
+### Funzionalità Principali
+
+Tutti gli script principali condividono funzionalità avanzate:
+
+*   **Gestione dei Lock**: Per prevenire esecuzioni multiple e conflitti, utilizzando un sistema a doppio `flock`.
+*   **Notifiche Desktop**: Per segnalare errori critici direttamente nell'ambiente grafico dell'utente.
+*   **Logging e Rotazione dei Log**: Per tracciare le operazioni e gestire lo spazio su disco tramite `logrotate`.
+*   **Recupero Automatico**: In caso di errori, vengono eseguiti tentativi di diagnostica e recupero (es. `--resync` per `bisync`).
+*   **Safety Checks**: Il `bisync` controlla la presenza di file aperti o modificati di recente per evitare conflitti.
+
+### Prerequisiti
+
+Assicurati che i seguenti pacchetti siano installati sul tuo sistema:
+*   `rclone`: L'utility principale per la sincronizzazione.
+*   `util-linux`: Fornisce il comando `flock` per la gestione dei lock.
+*   `lsof`: (Consigliato) Usato da `bisync` per verificare se ci sono file aperti prima di una sincronizzazione.
+*   `logrotate`: Per la gestione e rotazione automatica dei file di log.
+*   `libnotify`: Fornisce `notify-send` per le notifiche desktop.
+
+### Installazione e Configurazione
+
+1.  **Eseguire lo script di setup**: Lo script `setup.sh` copia i file eseguibili nelle directory di sistema. Deve essere eseguito con `sudo`.
+    ```bash
+    sudo ./setup.sh
+    ```
+    **Nota**: Lo script per default è configurato per l'utente `frankel`. Modifica la variabile `TARGET_USER` in `setup.sh` e negli script `utility/wrapper_*` se il tuo nome utente è diverso.
+
+2.  **Configurazione Iniziale per ogni Task**: Per ogni **nuova** operazione di sincronizzazione che vuoi creare (es. un nuovo `bisync` per una nuova cartella), esegui **una volta** lo script di `test_setup_*` corrispondente. Questo crea la struttura di directory (`~/.config/rclone/conf_dir_*`), i file di log e imposta `logrotate`.
+    ```bash
+    # Esempio per un nuovo task di bisync
+    ./test/test_setup_rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
+    ```
 
 ---
 
@@ -24,89 +51,41 @@ All main scripts share advanced features such as:
 
 The scripts are organized into directories based on their function:
 
-*   **`/` (root)**: Contains the main scripts ready for production use (`rclone_bisync.sh`, `rclone_sync.sh`).
-*   **`/test`**: Contains variants of the main scripts with debug mode enabled (`test_setup_*`) and simplified scripts for testing basic commands (`test_command_*`).
-*   **`/utility`**: Contains scripts for manual operations (`rclone_copy_*`) and wrappers for execution via system cron (`wrapper_*`).
+*   **`/` (root)**: Contiene gli script principali pronti per l'uso in produzione (`rclone_bisync.sh`, `rclone_sync.sh`).
+*   **`/test`**: Contiene varianti degli script principali con modalità debug abilitata (`test_setup_*`) e script semplificati per testare i comandi base (`test_command_*`).
+*   **`/utility`**: Contiene script per operazioni manuali (`rclone_copy_*`), wrapper per l'esecuzione tramite cron di sistema (`wrapper_*`) e file di configurazione di esempio.
 
 ---
 
-### 1. `rclone_bisync.sh`
+### Script in Dettaglio
 
-**Role**: Main script for bidirectional synchronization (`local <-> remote`). It is designed to be run at regular intervals via `cron`.
+#### `rclone_bisync.sh`
 
-**Key Features**:
-*   **Bidirectional Synchronization**: Uses `rclone bisync`.
-*   **Automatic Recovery**: On failure, it performs connectivity, permissions, and space checks, then attempts a `--resync`.
-*   **Safety Check**: Before acting, it checks for open (`lsof`) or recently modified (`find`) files in the local directory, waiting or skipping the cycle to avoid conflicts.
-*   **Locking**: Uses `flock` to create two lock levels: one specific for `bisync` (non-blocking) and a general one for the remote (blocking), ensuring that different operations on the same remote do not overlap.
-*   **Logging and Notifications**: Logs every operation and sends desktop notifications in case of errors.
-*   **Automatic Setup**: Creates configuration directories, log files, and the configuration for `logrotate`.
+**Ruolo**: Script principale per la sincronizzazione bidirezionale (`locale <-> remoto`). È progettato per essere eseguito a intervalli regolari tramite `cron` dell'utente.
 
-**Usage (Crontab)**:
-Run `crontab -e` and add:
-```bash
-# Runs synchronization every 15 minutes
-*/15 * * * * /full/path/to/rclone_bisync.sh /home/user/GDrive MyRemote:
+**Funzionalità chiave**:
+*   **Sincronizzazione Bidirezionale**: Usa `rclone bisync`.
+*   **Recupero Automatico**: In caso di fallimento, esegue controlli di connettività, permessi e spazio, quindi tenta un `--resync`.
+*   **Safety Check**: Prima di agire, controlla i file aperti (`lsof`) o modificati di recente (`find`) nella directory locale, attendendo o saltando il ciclo per evitare conflitti.
+*   **Locking**: Utilizza il sistema di lock a due livelli per garantire l'integrità delle operazioni.
 
-# Runs synchronization at system startup
-@reboot sleep 60 && /full/path/to/rclone_bisync.sh /home/user/GDrive MyRemote:
-```
-
----
-
-### 2. `rclone_sync.sh`
+#### `rclone_sync.sh`
 
 **Ruolo**: Esegue una sincronizzazione **unidirezionale** da un percorso remoto a un altro (`remoto -> remoto`). Ideale per backup tra servizi cloud.
 
 **Funzionalità chiave**:
 *   **Sincronizzazione Unidirezionale**: Usa `rclone sync`.
 *   **Gestione Errori**: Controlla la connettività e invia notifiche in caso di fallimento.
-*   **Locking**: Condivide lo stesso sistema di lock del `bisync.sh` per evitare conflitti sullo stesso remote di origine.
-*   **Logging e Setup**: Simile a `bisync.sh`, gestisce log, rotazione e configurazioni iniziali.
+*   **Locking**: Condivide lo stesso sistema di lock del `bisync.sh` per evitare conflitti sullo stesso remote.
 
-**Utilizzo**:
-Può essere eseguito manualmente o tramite cron.
-```bash
-/percorso/completo/rclone_sync.sh SourceRemote:backup DestRemote:backup
-```
-
----
-
-### 3. Script di Setup e Debug (`/test`)
-
-Questi script sono pensati per la configurazione iniziale e la risoluzione dei problemi.
-
-*   `test_setup_rclone_bisync.sh`
-*   `test_setup_rclone_sync.sh`
-
-**Ruolo**: Sono varianti degli script principali con la modalità `DEBUG_MODE=1` attivata di default. Vanno eseguiti **manualmente una volta** per ogni nuovo task di sincronizzazione.
-
-**Scopo**:
-1.  **Verificare la configurazione**: Mostrano tutto l'output a terminale.
-2.  **Creare le strutture necessarie**: Creano le directory in `~/.config/rclone/`, i file di lock e di log.
-3.  **Impostare `logrotate`**: Tentano di scrivere il file di configurazione per la rotazione dei log, avvisando se sono necessari permessi di root.
-
-**Utilizzo**:
-```bash
-# Per un nuovo task di bisync
-./test/test_setup_rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
-
-# Per un nuovo task di sync
-./test/test_setup_rclone_sync.sh SourceRemote:cartella DestRemote:cartella
-```
-
----
-
-### 4. Script di Utility e Wrapper (`/utility`)
-
-#### `rclone_copy_remote_to_local.sh` e `rclone_copy_remote_to_remote.sh`
+#### Script di Utility (`rclone_copy_*`)
 
 **Ruolo**: Script semplici per eseguire operazioni di copia (`rclone copy`) una tantum. A differenza di un `rclone copy` manuale, questi script **rispettano il sistema di lock**, attendendo se un'altra operazione (come `bisync`) è in corso sullo stesso remote.
 
 **Utilizzo**:
 ```bash
 # Copia dal cloud a una cartella locale
-./utility/rclone_copy_remote_to_local.sh MyRemote:file.zip /home/utente/download/
+./utility/rclone_copy_remote_to_local.sh MyRemote:file.zip /home/user/download/
 
 # Copia tra due cloud
 ./utility/rclone_copy_remote_to_remote.sh MyRemote:file.zip OtherRemote:backup/

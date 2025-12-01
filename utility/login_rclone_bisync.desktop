@@ -5,7 +5,7 @@ Name=Rclone Sync Login
 Comment=Esegue rclone bisync al login utente
 # "sh -c" ci permette di usare sleep prima dello script
 # sleep 5: dà tempo al desktop di caricare le icone e il server delle notifiche
-Exec=sh -c "sleep 5; /home/frankel/.personal/Rclone-Automation-Suite/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:"
+Exec=sh -c "sleep 5; /home/frankel/.bin/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:"
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

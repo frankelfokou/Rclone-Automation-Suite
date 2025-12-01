@@ -5,7 +5,8 @@
 
 # --- CONFIGURAZIONE ---
 TARGET_USER="frankel"
-SCRIPT_PATH="/home/frankel/.personal/Rclone-Automation-Suite/rclone_sync.sh"
+BIN_FOLDER="/home/frankel/.bin"
+SCRIPT_PATH="$BIN_FOLDER/rclone_sync.sh"
 SCRIPT_ARGS="GDrive-F4Frank: GDrive-Pro:"
 # ----------------------
 
