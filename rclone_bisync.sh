@@ -240,7 +240,6 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
             --resilient
             --recover
             --max-lock 2m
-            --max-delete 20
             --fast-list
             --fix-case
             --compare modtime
