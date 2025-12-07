@@ -1,16 +1,16 @@
 # `rclone` Synchronization Scripts Guide
 
-Questa guida illustra il funzionamento di una suite di script shell progettata per automatizzare, gestire e rendere robusta la sincronizzazione di file con `rclone`.
+This guide illustrates the functionality of a suite of shell scripts designed to automate, manage, and robustly handle file synchronization with `rclone`.
 
 ---
 
 ### General Overview
 
-La suite fornisce soluzioni per diversi scenari di sincronizzazione:
+The suite provides solutions for different synchronization scenarios:
 
 1.  **Bidirectional Synchronization (`bisync`)**: Keeps a local and a remote directory perfectly aligned. Ideal for daily work on files that need to be available both locally and in the cloud.
-2.  **Unidirectional Synchronization (`sync`)**: Utilizzata principalmente per backup da un cloud a un altro (remoto -> remoto).
-3.  **Unidirectional Copy (`copy`)**: Script di utilità per operazioni di copia manuale (remoto -> locale o remoto -> remoto) che rispettano il sistema di lock globale.
+2.  **Unidirectional Synchronization (`sync`)**: Primarily used for backups from one cloud to another (remote -> remote).
+3.  **Utility Scripts**: Includes wrappers for system-wide cron jobs and manual copy operations that respect the global locking system.
 
 ### Funzionalità Principali
 
@@ -18,9 +18,9 @@ Tutti gli script principali condividono funzionalità avanzate:
 
 *   **Gestione dei Lock**: Per prevenire esecuzioni multiple e conflitti, utilizzando un sistema a doppio `flock`.
 *   **Notifiche Desktop**: Per segnalare errori critici direttamente nell'ambiente grafico dell'utente.
-*   **Logging e Rotazione dei Log**: Per tracciare le operazioni e gestire lo spazio su disco tramite `logrotate`.
+*   **Logging e Rotazione dei Log**: To track operations and manage disk space via `logrotate`.
 *   **Recupero Automatico**: In caso di errori, vengono eseguiti tentativi di diagnostica e recupero (es. `--resync` per `bisync`).
-*   **Safety Checks**: Il `bisync` controlla la presenza di file aperti o modificati di recente per evitare conflitti.
+*   **Safety Checks**: The `bisync` script checks for open or recently modified files to prevent conflicts.
 
 ### Prerequisiti
 
@@ -34,15 +34,15 @@ Assicurati che i seguenti pacchetti siano installati sul tuo sistema:
 ### Installazione e Configurazione
 
 1.  **Eseguire lo script di setup**: Lo script `setup.sh` copia i file eseguibili nelle directory di sistema. Deve essere eseguito con `sudo`.
+    **Nota**: The script is configured by default for the user `frankel`. Modify the `TARGET_USER` variable in `setup.sh` if your username is different.
     ```bash
     sudo ./setup.sh
     ```
-    **Nota**: Lo script per default è configurato per l'utente `frankel`. Modifica la variabile `TARGET_USER` in `setup.sh` e negli script `utility/wrapper_*` se il tuo nome utente è diverso.
 
 2.  **Configurazione Iniziale per ogni Task**: Per ogni **nuova** operazione di sincronizzazione che vuoi creare (es. un nuovo `bisync` per una nuova cartella), esegui **una volta** lo script di `test_setup_*` corrispondente. Questo crea la struttura di directory (`~/.config/rclone/conf_dir_*`), i file di log e imposta `logrotate`.
     ```bash
     # Esempio per un nuovo task di bisync
-    ./test/test_setup_rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
+    ./rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
     ```
 
 ---
@@ -52,8 +52,7 @@ Assicurati che i seguenti pacchetti siano installati sul tuo sistema:
 The scripts are organized into directories based on their function:
 
 *   **`/` (root)**: Contiene gli script principali pronti per l'uso in produzione (`rclone_bisync.sh`, `rclone_sync.sh`).
-*   **`/test`**: Contiene varianti degli script principali con modalità debug abilitata (`test_setup_*`) e script semplificati per testare i comandi base (`test_command_*`).
-*   **`/utility`**: Contiene script per operazioni manuali (`rclone_copy_*`), wrapper per l'esecuzione tramite cron di sistema (`wrapper_*`) e file di configurazione di esempio.
+*   **`/utility`**: Contains wrapper scripts for system cron execution (`wrapper_*`) and an example `.desktop` file for autostart.
 
 ---
 
@@ -61,7 +60,7 @@ The scripts are organized into directories based on their function:
 
 #### `rclone_bisync.sh`
 
-**Ruolo**: Script principale per la sincronizzazione bidirezionale (`locale <-> remoto`). È progettato per essere eseguito a intervalli regolari tramite `cron` dell'utente.
+**Role**: Main script for bidirectional synchronization (`local <-> remote`). It is designed to be run at regular intervals via the user's `cron`.
 
 **Funzionalità chiave**:
 *   **Sincronizzazione Bidirezionale**: Usa `rclone bisync`.
@@ -71,7 +70,7 @@ The scripts are organized into directories based on their function:
 
 #### `rclone_sync.sh`
 
-**Ruolo**: Esegue una sincronizzazione **unidirezionale** da un percorso remoto a un altro (`remoto -> remoto`). Ideale per backup tra servizi cloud.
+**Role**: Performs a **unidirectional** synchronization from one remote path to another (`remote -> remote`). Ideal for backups between cloud services.
 
 **Funzionalità chiave**:
 *   **Sincronizzazione Unidirezionale**: Usa `rclone sync`.
@@ -79,39 +78,18 @@ The scripts are organized into directories based on their function:
 *   **Locking**: Condivide lo stesso sistema di lock del `bisync.sh` per evitare conflitti sullo stesso remote.
 
 #### Script di Utility (`rclone_copy_*`)
-
-**Ruolo**: Script semplici per eseguire operazioni di copia (`rclone copy`) una tantum. A differenza di un `rclone copy` manuale, questi script **rispettano il sistema di lock**, attendendo se un'altra operazione (come `bisync`) è in corso sullo stesso remote.
-
-**Utilizzo**:
-```bash
-# Copia dal cloud a una cartella locale
-./utility/rclone_copy_remote_to_local.sh MyRemote:file.zip /home/user/download/
-
-# Copia tra due cloud
-./utility/rclone_copy_remote_to_remote.sh MyRemote:file.zip OtherRemote:backup/
-```
+*(Note: These scripts are described for context but are not included in the base project files).*
+Simple scripts for one-time `rclone copy` operations. Unlike a manual `rclone copy`, these scripts **respect the locking system**, waiting if another operation (like `bisync`) is in progress on the same remote.
 
 #### `wrapper_sync_drive_to_drive.sh` e `wrapper_sync_drive_to_mega.sh`
 
-**Ruolo**: Sono script "wrapper" progettati per essere eseguiti da un `cron` di sistema (es. in `/etc/cron.daily`), che normalmente gira come utente `root`.
+**Role**: These are "wrapper" scripts designed to be executed by a system `cron` (e.g., in `/etc/cron.daily`), which normally runs as the `root` user.
 
-**Scopo**: Eseguono lo script `rclone_sync.sh` come utente specifico (`frankel` nell'esempio), impostando le variabili d'ambiente (`DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`) necessarie per permettere allo script di inviare **notifiche desktop** alla sessione grafica dell'utente corretto.
+**Purpose**: They execute the `rclone_sync.sh` script as a specific user (`frankel` in the example), setting the necessary environment variables (`DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`) to allow the script to send **desktop notifications** to the correct user's graphical session.
 
-**Utilizzo**:
-Posizionare lo script in una directory come `/etc/cron.daily/` per l'esecuzione giornaliera.
+**Usage**: The `setup.sh` script places them in `/etc/cron.daily/` for daily execution.
 
----
-
-### 5. Script di Test Semplici (`/test`)
-
-*   `test_command_rclone_bisync.sh`
-*   `test_command_rclone_sync.sh`
-
-**Ruolo**: Contengono esclusivamente il comando `rclone` con i flag preconfigurati, senza alcuna logica di lock, logging o gestione degli errori.
-
-**Scopo**: Utili per testare rapidamente il comportamento del solo comando `rclone` in isolamento.
-
-**Utilizzo**:
-```bash
-./test/test_command_rclone_bisync.sh /home/utente/Documenti MyRemote:Documenti
-```
+#### `login_rclone_bisync.desktop`
+**Role**: An autostart file that runs a specific `rclone_bisync.sh` command upon user login.
+**Purpose**: Ensures that synchronization for a critical directory (e.g., Documents) is attempted as soon as the user logs into their graphical session.
+**Usage**: The `setup.sh` script copies this file to `~/.config/autostart/`. You should edit the `Exec` line within this file to match the path and remote you wish to sync on login.

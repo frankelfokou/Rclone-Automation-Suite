@@ -29,6 +29,7 @@ fi
 
 /usr/bin/rclone bisync "${LOCAL_PATH}" "${REMOTE_PATH}" --resync \
 --check-access \
+--remove-empty-dirs \
 --resilient \
 --recover \
 --max-lock 2m \
