@@ -187,16 +187,21 @@ if command -v lsof >/dev/null 2>&1; then
     retry_count=0
     
     # Ciclo finché lsof trova file aperti (exit code 0 = trovati)
-    while lsof +D "$LOCAL_PATH" >/dev/null 2>&1; do
+    while open_files=$(lsof +D "$LOCAL_PATH" 2>/dev/null); [ -n "$open_files" ]; do
+        log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
         if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
             echo "[$(date)] SKIP: File aperti rilevati dopo $((MAX_RETRIES * WAIT_SECONDS))s. Rinuncio per questo giro."
-            # Usciamo con 0 per non allarmare cron, riproveremo tra 15 min
+            echo "[$(date)] I seguenti file erano ancora aperti:" >&2
+            echo "$open_files" >&2
+            # Usciamo con 0 per non allarmare cron, riproveremo tra 10 min
             exit 0
         fi
         
-        log_message "File in uso rilevati. Attesa ${WAIT_SECONDS}s... ($((retry_count+1))/$MAX_RETRIES)"
+        log_message "File in uso rilevati. Attesa ${WAIT_SECONDS}s... ($((retry_count+1))/$MAX_RETRIES). File aperti:"
+        # Logga solo i nomi dei file per brevità
+        log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
         sleep "$WAIT_SECONDS"
-        ((retry_count++))
+        ((++retry_count))
     done
 fi
 echo "[$(date)] Safety check LSOF avvenuto con successo" >&2
@@ -236,6 +241,7 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
         
         RCLONE_CMD=(
             /usr/bin/rclone bisync "$LOCAL_PATH" "$REMOTE_PATH"
+            --remove-empty-dirs
             --check-access
             --resilient
             --recover
