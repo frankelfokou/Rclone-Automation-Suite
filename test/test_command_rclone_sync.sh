@@ -59,6 +59,7 @@ fi
 
 
 /usr/bin/rclone sync "$SOURCE_PATH" "$DEST_PATH" \
+--exclude-from /home/frankel/.config/rclone/exclude_patterns.txt \
 --create-empty-src-dirs \
 --fast-list \
 --drive-stop-on-upload-limit \
@@ -66,4 +67,5 @@ fi
 --transfers=16 \
 --drive-chunk-size=128M \
 --drive-pacer-min-sleep=10ms \
--v
+-v \
+--resync
