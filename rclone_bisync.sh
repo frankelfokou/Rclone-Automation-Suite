@@ -39,7 +39,7 @@ log_message() {
 }
 
 # --- Debug Mode & Conditional Logging ---
-DEBUG_MODE=0 
+DEBUG_MODE=1 
 
 if [ "$DEBUG_MODE" == "1" ]; then
     echo "--- DEBUG MODE ENABLED: L'output verrà mostrato a schermo e non nel file di log. ---"
@@ -241,6 +241,7 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
         
         RCLONE_CMD=(
             /usr/bin/rclone bisync "$LOCAL_PATH" "$REMOTE_PATH"
+            --exclude-from /home/frankel/.config/rclone/exclude_patterns.txt
             --remove-empty-dirs
             --check-access
             --resilient

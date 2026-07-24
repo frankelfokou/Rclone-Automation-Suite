@@ -60,6 +60,7 @@ fi
         echo "[$(date)] Lock specifico per copy acquisito. Avvio rclone sync." >&2
         
         /usr/bin/rclone copy "$SRC_REMOTE_PATH" "$DEST_LOCAL_PATH" \
+        --exclude-from /home/frankel/.config/rclone/exclude_patterns.txt \
         --max-delete 20 \
         --fast-list \
         --drive-stop-on-upload-limit  \

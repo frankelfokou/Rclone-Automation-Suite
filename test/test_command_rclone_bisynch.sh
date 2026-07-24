@@ -28,6 +28,7 @@ if ! /usr/bin/rclone listremotes | grep -q "^${REMOTE_NAME}:"; then
 fi
 
 /usr/bin/rclone bisync "${LOCAL_PATH}" "${REMOTE_PATH}" --resync \
+--exclude-from /home/frankel/.config/rclone/exclude_patterns.txt \
 --check-access \
 --remove-empty-dirs \
 --resilient \
@@ -44,4 +45,5 @@ fi
 --drive-pacer-min-sleep=10ms \
 --drive-export-formats docx,xlsx,pptx \
 --drive-import-formats docx,xlsx,pptx \
--v
+-v \
+--resync

@@ -198,6 +198,7 @@ fi
         
         RCLONE_CMD=(
             /usr/bin/rclone sync "$SOURCE_PATH" "$DEST_PATH"
+            --exclude-from /home/frankel/.config/rclone/exclude_patterns.txt
             --create-empty-src-dirs     
             --fast-list
             --drive-stop-on-upload-limit
