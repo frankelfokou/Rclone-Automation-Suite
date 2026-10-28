@@ -177,13 +177,68 @@ else
     fi
 fi
 
+# ------------------------------------------------------------------------------
+# SAFETY CHECK: BUSY WAIT (Prima dei Lock)
+# ------------------------------------------------------------------------------
+# Lo mettiamo QUI, fuori dai lock.
+# Motivo: Se entriamo in un loop di attesa dentro il "flock 201" (che è bloccante),
+# i successivi job di cron (es. tra 15 min) si accoderebbero restando appesi in RAM.
+# Facendo il controllo qui, se c'è un file aperto, lo script aspetta o esce
+# senza bloccare la coda dei lock per il futuro.
+
+WAIT_SECONDS=10
+MAX_RETRIES=18 # 18 * 10s = 3 minuti di attesa massima
+
+# Determina se la SOURCE è un path locale (senza ":")
+if [[ ! "$SOURCE_PATH" == *":"* ]] && [ -d "$SOURCE_PATH" ]; then
+    echo "[$(date)] Inizio safety check LSOF per file aperti" >&2
+    if command -v lsof >/dev/null 2>&1; then
+        retry_count=0
+
+        # Ciclo finché lsof trova file aperti (exit code 0 = trovati)
+        while open_files=$(lsof +D "$SOURCE_PATH" 2>/dev/null); [ -n "$open_files" ]; do
+            log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
+            if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
+                echo "[$(date)] SKIP: File aperti rilevati dopo $((MAX_RETRIES * WAIT_SECONDS))s. Rinuncio per questo giro."
+                echo "[$(date)] I seguenti file erano ancora aperti:" >&2
+                echo "$open_files" >&2
+                # Usciamo con 0 per non allarmare cron, riproveremo tra 10 min
+                exit 0
+            fi
+
+            log_message "File in uso rilevati. Attesa ${WAIT_SECONDS}s... ($((retry_count+1))/$MAX_RETRIES). File aperti:"
+            log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
+            sleep "$WAIT_SECONDS"
+            ((++retry_count))
+        done
+    fi
+    echo "[$(date)] Safety check LSOF avvenuto con successo" >&2
+
+    # Controllo aggiuntivo per modifiche recenti (se lsof non vede tutto o se lsof non c'è)
+    # Aspetta se un file è stato toccato negli ultimi 60 secondi
+    echo "[$(date)] Inizio safety check FIND per modifiche nell'ultimo minuto" >&2
+    if find "$SOURCE_PATH" -type f -mmin -1 -print -quit 2>/dev/null | grep -q .; then
+        echo "[$(date)] SKIP: Modifiche file rilevate nell'ultimo minuto. Lascio stabilizzare."
+        exit 0
+    fi
+    echo "[$(date)] Safety check FIND avvenuto con successo" >&2
+else
+    echo "[$(date)] SKIP: Safety check LSOF/FIND non applicabile (SOURCE è un remote o directory non locale)." >&2
+fi
+
+# ------------------------------------------------------------------------------
+# FINE SAFETY CHECK
+# ------------------------------------------------------------------------------
+
 # --- Main Logic with Locking ---
 ( # Nuovo lock BLOKKANTE per il remote (FD 201)
     # Attende se un altro script sta usando lo stesso remote.
 
     echo "[$(date)] Tentativo di aquisizione lock generale per ${REMOTE_NAME}" >&2
-    flock 201
-    echo "[$(date)] Lock generale per ${REMOTE_NAME} acquisito." >&2
+    flock -n 201 || {
+        echo "[$(date)] Lock generale per ${REMOTE_NAME} già occupato da un altro processo. Uscita." >&2
+        exit 1
+    }
 
     ( # Lock NON-BLOKKANTE esistente per bisync (FD 200)
         # Acquire an exclusive lock on file descriptor 200.

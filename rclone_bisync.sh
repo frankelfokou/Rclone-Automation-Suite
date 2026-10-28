@@ -39,7 +39,7 @@ log_message() {
 }
 
 # --- Debug Mode & Conditional Logging ---
-DEBUG_MODE=1 
+DEBUG_MODE=1
 
 if [ "$DEBUG_MODE" == "1" ]; then
     echo "--- DEBUG MODE ENABLED: L'output verrà mostrato a schermo e non nel file di log. ---"
@@ -225,8 +225,10 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
     # Attende se un altro script sta usando lo stesso remote.
 
     echo "[$(date)] Tentativo di aquisizione lock generale per ${REMOTE_NAME}" >&2
-    flock 201
-    echo "[$(date)] Lock generale per ${REMOTE_NAME} acquisito." >&2
+    flock -n 201 || {
+        echo "[$(date)] Lock generale per ${REMOTE_NAME} già occupato da un altro processo. Uscita." >&2
+        exit 1
+    }
 
     ( # Lock NON-BLOKKANTE esistente per bisync (FD 200)
         # Acquire an exclusive lock on file descriptor 200.
