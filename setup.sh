@@ -42,5 +42,30 @@ cp utility/wrapper_sync_drive_to_mega.sh utility/wrapper_sync_drive_to_drive.sh 
 echo "Copia del file di avvio automatico in $AUTOSTART_FOLDER..."
 cp utility/login_rclone_bisync.desktop "$AUTOSTART_FOLDER/"
 
+# --- Gestione Crontab utente ---
+CRONTAB_FILE="utility/crontab.txt"
+if [ ! -f "$CRONTAB_FILE" ]; then
+    echo "Errore: file crontab '$CRONTAB_FILE' non trovato." >&2
+    exit 1
+fi
+
+CRONTAB_BLOCK=$(cat "$CRONTAB_FILE")
+
+# Marcatore per idempotenza: riga attiva con il comando rclone_bisync
+CRONTAB_MARKER="/home/frankel/.bin/rclone_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank:"
+
+echo "Verifica crontab utente ${TARGET_USER}..."
+CURRENT_CRONTAB=$(crontab -u "$TARGET_USER" -l 2>/dev/null || true)
+
+if echo "$CURRENT_CRONTAB" | grep -qF "$CRONTAB_MARKER"; then
+    echo "Crontab già configurato per ${TARGET_USER}, nessuna modifica."
+else
+    {
+        echo "$CURRENT_CRONTAB"
+        printf '%s' "$CRONTAB_BLOCK"
+    } | crontab -u "$TARGET_USER" -
+    echo "Crontab aggiornato per ${TARGET_USER}."
+fi
+
 echo -e "\n--- Installazione completata con successo! ---"
 
