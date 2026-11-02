@@ -39,7 +39,7 @@ log_message() {
 }
 
 # --- Debug Mode & Conditional Logging ---
-DEBUG_MODE=1
+DEBUG_MODE=0
 
 if [ "$DEBUG_MODE" == "1" ]; then
     echo "--- DEBUG MODE ENABLED: L'output verrà mostrato a schermo e non nel file di log. ---"
@@ -80,13 +80,20 @@ CONF_DIR="/home/frankel/.config/rclone/conf_dir_${REMOTE_NAME}"
 LOCK_FILE_BISYNC="${CONF_DIR}/lock_files/bisync-${REMOTE_NAME}.lock"
 LOCK_FILE_REMOTE="${CONF_DIR}/lock_files/remote-${REMOTE_NAME}.lock"
 LOG_FILE="${CONF_DIR}/log_files/bisync-${REMOTE_NAME}.log"
+BLOCKED_FILE="${CONF_DIR}/lock_files/bisync-${REMOTE_NAME}.blocked"
 
-# Controlla e crea la directory di configurazione se non esiste.
-if [ ! -d "$CONF_DIR" ]; then
-    log_message "La directory di configurazione '$CONF_DIR' non esiste. Tentativo di creazione..."
-    if ! mkdir -p "$CONF_DIR"; then
+# Attesa massima sul lock remoto (secondi)
+LOCK_WAIT="${LOCK_WAIT:-120}"
+# Safety check lsof: attesa tra un tentativo e l'altro e numero di tentativi
+LSOF_WAIT_SECONDS="${LSOF_WAIT_SECONDS:-10}"
+LSOF_MAX_RETRIES="${LSOF_MAX_RETRIES:-18}"
+
+# Controlla e crea le directory di configurazione, log e lock se non esistono.
+if [ ! -d "$CONF_DIR/log_files" ] || [ ! -d "$CONF_DIR/lock_files" ]; then
+    log_message "Creazione directory log/lock in '$CONF_DIR'..."
+    if ! mkdir -p "$CONF_DIR/log_files" "$CONF_DIR/lock_files"; then
         # Se la creazione fallisce, invia una notifica ed esce.
-        ERR_MSG="Impossibile creare la directory di configurazione: '$CONF_DIR'. Controllare i permessi."
+        ERR_MSG="Impossibile creare le directory in '$CONF_DIR'. Controllare i permessi."
         log_message "ERRORE CRITICO: $ERR_MSG"
         send_notification "$ERR_MSG"
         exit 1
@@ -95,11 +102,9 @@ fi
 
 # Controlla che il file di log esista
 if [ ! -f "$LOG_FILE" ]; then
-    log_message "Il file di log '$LOG_FILE' non esiste. tentativo di creazione..."
     if ! touch "$LOG_FILE"; then
-        # Se la creazione fallisce, invia una notifica ed esce.
         ERR_MSG="Impossibile creare il file di log: '$LOG_FILE'. Controllare i permessi."
-        log_message "ERRORE CRITICO: $ERR_MSG"
+        echo "ERRORE CRITICO: $ERR_MSG"
         send_notification "$ERR_MSG"
         exit 1
     fi
@@ -129,47 +134,6 @@ if [ ! -f "$LOCAL_PATH/RCLONE_TEST" ]; then
     fi
 fi
 
-LOG_ROTATE_FILE="/etc/logrotate.d/rclone_bisync_${REMOTE_NAME}"
-
-# --- Gestione Configurazione Logrotate ---
-# Definisce il contenuto atteso per il file di configurazione di logrotate.
-read -r -d '' LOGROTATE_CONTENT << EOF || true
-"$LOG_FILE" {
-    rotate 7
-    daily
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-}
-EOF
-
-# Controlla se il file di configurazione di logrotate esiste.
-if [ ! -f "$LOG_ROTATE_FILE" ]; then
-    # Tenta di creare il file. Fallirà se non si hanno i permessi (richiede sudo).
-    if ! echo "$LOGROTATE_CONTENT" | sudo tee "$LOG_ROTATE_FILE" > /dev/null 2>&1; then
-        ERR_MSG="Impossibile creare '$LOG_ROTATE_FILE'. Sono necessari i permessi di root."
-        echo "ATTENZIONE: $ERR_MSG"
-        echo "Per abilitare la rotazione dei log, eseguire manualmente il seguente comando:"
-        echo "echo \"${LOGROTATE_CONTENT}\" | sudo tee \"${LOG_ROTATE_FILE}\" > /dev/null"
-        send_notification "$ERR_MSG"
-    fi
-else
-    # Il file esiste, controlla il contenuto.
-    CURRENT_CONTENT=$(cat "$LOG_ROTATE_FILE")
-    if [ "$CURRENT_CONTENT" != "$LOGROTATE_CONTENT" ]; then
-        # Tenta di sovrascrivere il file. Fallirà se non si hanno i permessi (richiede sudo).
-        if ! echo "$LOGROTATE_CONTENT" | sudo tee "$LOG_ROTATE_FILE" > /dev/null 2>&1; then
-            ERR_MSG="Impossibile aggiornare '$LOG_ROTATE_FILE'. Sono necessari i permessi di root."
-            echo "ATTENZIONE: $ERR_MSG"
-            echo "Per correggere la configurazione, eseguire manualmente il seguente comando:"
-            echo "echo \"${LOGROTATE_CONTENT}\" | sudo tee \"${LOG_ROTATE_FILE}\" > /dev/null"
-            send_notification "$ERR_MSG"
-        fi
-    fi
-fi
-
 # ------------------------------------------------------------------------------
 # SAFETY CHECK: BUSY WAIT (Prima dei Lock)
 # ------------------------------------------------------------------------------
@@ -179,8 +143,8 @@ fi
 # Facendo il controllo qui, se c'è un file aperto, lo script aspetta o esce
 # senza bloccare la coda dei lock per il futuro.
 
-WAIT_SECONDS=10
-MAX_RETRIES=18 # 18 * 10s = 3 minuti di attesa massima
+WAIT_SECONDS="$LSOF_WAIT_SECONDS"
+MAX_RETRIES="$LSOF_MAX_RETRIES"
 
 echo "[$(date)] Inizio safety check LSOF per file aperti" >&2
 if command -v lsof >/dev/null 2>&1; then
@@ -190,11 +154,12 @@ if command -v lsof >/dev/null 2>&1; then
     while open_files=$(lsof +D "$LOCAL_PATH" 2>/dev/null); [ -n "$open_files" ]; do
         log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
         if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
-            echo "[$(date)] SKIP: File aperti rilevati dopo $((MAX_RETRIES * WAIT_SECONDS))s. Rinuncio per questo giro."
+            echo "[$(date)] DEFER: file aperti dopo $((MAX_RETRIES * WAIT_SECONDS))s. Rinvio (75)." >&2
             echo "[$(date)] I seguenti file erano ancora aperti:" >&2
             echo "$open_files" >&2
-            # Usciamo con 0 per non allarmare cron, riproveremo tra 10 min
-            exit 0
+            # 75 = EX_TEMPFAIL: non è un successo né un errore definitivo.
+            # Il watcher/timer riproveranno appena i file saranno chiusi.
+            exit 75
         fi
         
         log_message "File in uso rilevati. Attesa ${WAIT_SECONDS}s... ($((retry_count+1))/$MAX_RETRIES). File aperti:"
@@ -206,14 +171,10 @@ if command -v lsof >/dev/null 2>&1; then
 fi
 echo "[$(date)] Safety check LSOF avvenuto con successo" >&2
 
-# Controllo aggiuntivo per modifiche recenti (se lsof non vede tutto o se lsof non c'è)
-# Aspetta se un file è stato toccato negli ultimi 60 secondi
-echo "[$(date)] Inizio safety check FIND per modifiche nell'ultimo minuto" >&2
-if find "$LOCAL_PATH" -type f -mmin -1 -print -quit 2>/dev/null | grep -q .; then
-     echo "[$(date)] SKIP: Modifiche file rilevate nell'ultimo minuto. Lascio stabilizzare."
-     exit 0
-fi
-echo "[$(date)] Safety check FIND avvenuto con successo" >&2
+# Il controllo "modifiche nell'ultimo minuto" (find -mmin -1) è stato rimosso:
+# subito dopo un salvataggio è sempre vero e rendeva impossibile qualsiasi
+# sincronizzazione innescata da un evento. La quiete della directory è
+# garantita dal debounce del watcher.
 
 # ------------------------------------------------------------------------------
 # FINE SAFETY CHECK
@@ -221,22 +182,20 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
 
 
 # --- Main Logic with Locking ---
-( # Nuovo lock BLOKKANTE per il remote (FD 201)
-    # Attende se un altro script sta usando lo stesso remote.
+( # Lock per il remote (FD 201) con attesa limitata.
 
-    echo "[$(date)] Tentativo di aquisizione lock generale per ${REMOTE_NAME}" >&2
-    flock -n 201 || {
-        echo "[$(date)] Lock generale per ${REMOTE_NAME} già occupato da un altro processo. Uscita." >&2
-        exit 1
-    }
+    echo "[$(date)] Tentativo di acquisizione lock generale per ${REMOTE_NAME}" >&2
+    if ! flock -w "$LOCK_WAIT" 201; then
+        echo "[$(date)] DEFER: lock generale per ${REMOTE_NAME} occupato (attesa ${LOCK_WAIT}s)." >&2
+        exit 75
+    fi
 
-    ( # Lock NON-BLOKKANTE esistente per bisync (FD 200)
-        # Acquire an exclusive lock on file descriptor 200.
+    ( # Lock non bloccante specifico per bisync (FD 200)
 
-        echo "[$(date)] Tentativo di aquisizione lock specifico per bisync per ${REMOTE_NAME}" >&2
+        echo "[$(date)] Tentativo di acquisizione lock specifico per bisync per ${REMOTE_NAME}" >&2
         flock -n 200 || {
-            echo "[$(date)] Script bisync già in esecuzione per ${REMOTE_NAME}. Uscita." >&2
-            exit 1
+            echo "[$(date)] DEFER: bisync già in esecuzione per ${REMOTE_NAME}." >&2
+            exit 75
         }
 
         echo "[$(date)] Lock bisync acquisito. Avvio rclone bisync per ${REMOTE_NAME}." >&2
@@ -263,9 +222,11 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
         )
 
         # --- Execute and Handle Errors ---
-        if ! RCLONE_OUTPUT=$("${RCLONE_CMD[@]}" 2>&1); then
+        RCLONE_RC=0
+        RCLONE_OUTPUT=$("${RCLONE_CMD[@]}" 2>&1) || RCLONE_RC=$?
+        if [ "$RCLONE_RC" -ne 0 ]; then
             # --- GESTIONE PRIMO ERRORE ---
-            echo "[$(date)] Rclone bisync failed" >&2
+            echo "[$(date)] Rclone bisync failed (exit ${RCLONE_RC})" >&2
             echo "${RCLONE_OUTPUT}" >&2
 
             echo "[$(date)] Attempting recovery..." >&2
@@ -275,11 +236,15 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
                 ERR="Remote '${REMOTE_NAME}' is unreachable. Check internet or token."
                 echo "[$(date)] CRITICAL: $ERR" >&2
                 send_notification "$ERR"
-                exit 1
+                # Errore di rete: ritentabile, non è un fallimento definitivo.
+                exit 75
             fi
 
             # Controlla l'esistenza del RCLONE_TEST sul remote e lo crea se non esiste.
-            if ! /usr/bin/rclone lsf "${REMOTE_PATH}" | grep -q "^RCLONE_TEST$"; then
+            # Il listing viene catturato prima del grep: con pipefail un SIGPIPE
+            # di "grep -q" farebbe sembrare fallita la pipeline.
+            REMOTE_LISTING=$(/usr/bin/rclone lsf "${REMOTE_PATH}" 2>/dev/null || true)
+            if ! printf '%s\n' "$REMOTE_LISTING" | grep -qx 'RCLONE_TEST'; then
                 if ! /usr/bin/rclone touch "${REMOTE_PATH}/RCLONE_TEST"; then
                     ERR="Failed to create 'RCLONE_TEST' on remote '${REMOTE_PATH}'. Check remote permissions."
                     echo "[$(date)] CRITICAL: $ERR" >&2
@@ -316,10 +281,25 @@ echo "[$(date)] Safety check FIND avvenuto con successo" >&2
                 exit 1
             fi
 
-            echo "[$(date)] Connectivity OK. Attempting --resync..." >&2
+            # --- RESYNC SOLO SU ERRORE CRITICO E A DIRECTORY QUIETA ---
+            if [ "$RCLONE_RC" -ne 7 ]; then
+                echo "[$(date)] Errore non critico (exit ${RCLONE_RC}): nessun --resync, rinvio." >&2
+                exit 75
+            fi
+
+            if command -v lsof >/dev/null 2>&1; then
+                if [ -n "$(lsof +D "$LOCAL_PATH" 2>/dev/null)" ]; then
+                    echo "[$(date)] DEFER: file aperti, --resync rinviato." >&2
+                    exit 75
+                fi
+            fi
+
+            echo "[$(date)] Errore critico (exit 7). Tentativo di --resync..." >&2
 
             # --- TENTATIVO DI RESYNC ---
-            if ! RESYNC_OUT=$("${RCLONE_CMD[@]}" --resync 2>&1); then
+            RESYNC_RC=0
+            RESYNC_OUT=$("${RCLONE_CMD[@]}" --resync 2>&1) || RESYNC_RC=$?
+            if [ "$RESYNC_RC" -ne 0 ]; then
                 # Catturiamo le ultime 3 righe dell'errore per mostrarle nella notifica
                 LAST_ERR=$(echo "$RESYNC_OUT" | tail -n 3)
                 
@@ -330,8 +310,11 @@ $LAST_ERR"
                 echo "[$(date)] CRITICAL: Resync failed." >&2
                 echo "${RESYNC_OUT}" >&2
                 send_notification "$FULL_ERR"
-                exit 1
+                : > "$BLOCKED_FILE"
+                echo "[$(date)] CRITICAL: watcher sospeso fino a intervento manuale (${BLOCKED_FILE})." >&2
+                exit 7
             else
+                rm -f "$BLOCKED_FILE"
                 echo "[$(date)] --resync was successful." >&2
                 echo "${RESYNC_OUT}" >&2
                 # Opzionale: Notifica di successo dopo un recupero difficile

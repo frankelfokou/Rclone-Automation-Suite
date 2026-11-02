@@ -1,0 +1,17 @@
+[Unit]
+Description=Rclone bisync per istanza %i
+Documentation=man:rclone(1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-bisync-%i.env
+ExecStart=/home/frankel/.bin/rclone_bisync.sh ${LOCAL_PATH} ${REMOTE_PATH}
+# 75 = EX_TEMPFAIL: rinvio (file aperti o lock occupato), non un fallimento
+SuccessExitStatus=75
+# Nessun restart: Type=oneshot esce quando finisce
+# I lock flock negli script prevengono esecuzioni simultanee
+
+[Install]
+WantedBy=timers.target

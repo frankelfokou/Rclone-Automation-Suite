@@ -1,0 +1,15 @@
+[Unit]
+Description=Rclone sync per istanza %i
+Documentation=man:rclone(1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-sync-%i.env
+ExecStart=/home/frankel/.bin/rclone_sync.sh ${SOURCE_PATH} ${DEST_PATH}
+# Nessun restart: Type=oneshot esce quando finisce
+# I lock flock negli script prevengono esecuzioni simultanee
+
+[Install]
+WantedBy=timers.target

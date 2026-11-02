@@ -1,0 +1,19 @@
+[Unit]
+Description=Watcher debounce realtime per rclone bisync istanza %i
+Documentation=man:rclone(1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-bisync-%i.env
+Environment=MIN_INTERVAL=45 LSOF_POLL=2 LSOF_MAX_WAIT=1800 BACKOFF_START=10 BACKOFF_MAX=300
+ExecStart=/home/frankel/.bin/rclone_watch_bisync.sh ${LOCAL_PATH} ${REMOTE_PATH} 15
+# on-failure + SuccessExitStatus=75: se il watcher è sospeso (75) non viene
+# riavviato in loop; riparte solo per errori imprevisti.
+Restart=on-failure
+RestartSec=10
+SuccessExitStatus=75
+
+[Install]
+WantedBy=default.target

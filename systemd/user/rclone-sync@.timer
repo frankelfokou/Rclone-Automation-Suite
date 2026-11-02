@@ -1,0 +1,16 @@
+[Unit]
+Description=Timer per rclone sync (istanza %i)
+Documentation=man:systemd.timer(5)
+
+[Timer]
+# Avvio 5 minuti dopo il boot
+OnBootSec=5min
+# Esecuzione giornaliera (sostituisce wrapper /etc/cron.daily)
+OnCalendar=daily
+# Unità da avviare
+Unit=rclone-sync@%i.service
+# Non riusare se il sistema era spento all'ora prevista
+Persistent=true
+
+[Install]
+WantedBy=timers.target

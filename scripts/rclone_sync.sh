@@ -119,11 +119,9 @@ fi
 
 # Controlla che il file di log esista
 if [ ! -f "$LOG_FILE" ]; then
-    log_message "Il file di log '$LOG_FILE' non esiste. tentativo di creazione..."
     if ! touch "$LOG_FILE"; then
-        # Se la creazione fallisce, invia una notifica ed esce.
         ERR_MSG="Impossibile creare il file di log: '$LOG_FILE'. Controllare i permessi."
-        log_message "ERRORE CRITICO: $ERR_MSG"
+        echo "ERRORE CRITICO: $ERR_MSG"
         send_notification "$ERR_MSG"
         exit 1
     fi
@@ -135,47 +133,6 @@ if [ "$DEBUG_MODE" -eq 0 ]; then
     exec >> "$LOG_FILE" 2>&1
 fi
 
-
-LOG_ROTATE_FILE="/etc/logrotate.d/rclone_sync_${REMOTE_NAME}"
-
-# --- Gestione Configurazione Logrotate ---
-# Definisce il contenuto atteso per il file di configurazione di logrotate.
-read -r -d '' LOGROTATE_CONTENT << EOF || true
-"$LOG_FILE" {
-    rotate 7
-    daily
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-}
-EOF
-
-# Controlla se il file di configurazione di logrotate esiste.
-if [ ! -f "$LOG_ROTATE_FILE" ]; then
-    # Tenta di creare il file. Fallirà se non si hanno i permessi (richiede sudo).
-    if ! echo "$LOGROTATE_CONTENT" | sudo tee "$LOG_ROTATE_FILE" > /dev/null 2>&1; then
-        ERR_MSG="Impossibile creare '$LOG_ROTATE_FILE'. Sono necessari i permessi di root."
-        echo "ATTENZIONE: $ERR_MSG"
-        echo "Per abilitare la rotazione dei log, eseguire manualmente il seguente comando:"
-        echo "echo \"${LOGROTATE_CONTENT}\" | sudo tee \"${LOG_ROTATE_FILE}\" > /dev/null"
-        send_notification "$ERR_MSG"
-    fi
-else
-    # Il file esiste, controlla il contenuto.
-    CURRENT_CONTENT=$(cat "$LOG_ROTATE_FILE")
-    if [ "$CURRENT_CONTENT" != "$LOGROTATE_CONTENT" ]; then
-        # Tenta di sovrascrivere il file. Fallirà se non si hanno i permessi (richiede sudo).
-        if ! echo "$LOGROTATE_CONTENT" | sudo tee "$LOG_ROTATE_FILE" > /dev/null 2>&1; then
-            ERR_MSG="Impossibile aggiornare '$LOG_ROTATE_FILE'. Sono necessari i permessi di root."
-            echo "ATTENZIONE: $ERR_MSG"
-            echo "Per correggere la configurazione, eseguire manualmente il seguente comando:"
-            echo "echo \"${LOGROTATE_CONTENT}\" | sudo tee \"${LOG_ROTATE_FILE}\" > /dev/null"
-            send_notification "$ERR_MSG"
-        fi
-    fi
-fi
 
 # ------------------------------------------------------------------------------
 # SAFETY CHECK: BUSY WAIT (Prima dei Lock)

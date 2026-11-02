@@ -1,0 +1,19 @@
+[Unit]
+Description=Timer per rclone bisync (istanza %i)
+Documentation=man:systemd.timer(5)
+
+[Timer]
+# Avvio 1 minuto dopo il boot (dà tempo al WiFi di connettersi)
+OnBootSec=1min
+# Riconciliazione remoto -> locale. Il watcher copre locale -> remoto in tempo reale.
+# 2 minuti è il compromesso consigliato; per ridurre il carico API usare 5min o 10min.
+OnUnitActiveSec=2min
+# Evita che l'AccuracySec di default (1 min) allunghi l'intervallo effettivo.
+AccuracySec=10s
+# Unità da avviare
+Unit=rclone-bisync@%i.service
+# Non riusare se il sistema era spento all'ora prevista (come cron)
+Persistent=true
+
+[Install]
+WantedBy=timers.target
