@@ -13,19 +13,6 @@ LOCKDIR="$TEST_TMP/conf/conf_dir_tst/lock_files"
 LOG="$TEST_TMP/conf/conf_dir_tst/log_files/bisync-tst.log"
 BLOCKED="$LOCKDIR/bisync-tst.blocked"
 
-HOLDER_PID=""
-hold_fd() { # file, modalità (r/w), secondi
-    local file="$1"
-    local mode="$2"
-    local seconds="$3"
-    if [ "$mode" = "r" ]; then
-        bash -c 'exec 9<"'"$file"'"; sleep '"$seconds" >/dev/null 2>&1 &
-    else
-        bash -c 'exec 9>"'"$file"'"; flock -n 9; sleep '"$seconds" >/dev/null 2>&1 &
-    fi
-    HOLDER_PID=$!
-}
-
 printf '\n-- validazione argomenti --\n'
 "$BISYNC" >/dev/null 2>&1
 assert_eq 1 "$?" "nessun argomento -> 1"
@@ -67,7 +54,8 @@ printf '\n-- run normale --\n'
 rm -f "$LOG"
 STUB_SLEEP=0 "$BISYNC" "$SRC" "tst:" >/dev/null 2>&1
 assert_eq 0 "$?" "run normale -> 0"
-assert_contains "$LOG" "Rclone bisync finished." "output nel file di log"
+assert_contains "$LOG" "Rclone bisync completato (exit 0)." "output nel file di log"
+assert_contains "$LOG" "[BISYNC]" "il log riporta il tag del componente"
 assert_absent "$BLOCKED" "nessun marker dopo successo"
 
 printf '\n-- errori rclone --\n'

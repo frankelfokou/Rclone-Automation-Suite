@@ -1,16 +1,23 @@
 #!/bin/bash
-
-# Watcher con debounce per sincronizzazione in tempo reale (realtime sync)
+#
+# rclone_watch_bisync.sh — watcher realtime locale -> Drive.
+# Responsabilità: eventi inotify, debounce, gate sui file aperti, intervallo
+# minimo tra run, backoff e sospensione su errore critico.
+# Le responsabilità condivise sono in scripts/lib/common.sh.
+#
 # Uso: rclone_watch_bisync.sh <local_path> <remote_path> [debounce_secondi]
-# Esempio: rclone_watch_bisync.sh /home/frankel/GDrive-F4Frank GDrive-F4Frank: 15
 #
 # Exit code:
-#   0  terminazione richiesta (systemd stop)
-#   7  errore critico bisync: richiesto --resync manuale
-#   75 watcher sospeso (marker BLOCKED_FILE presente)
-#   1  errore imprevisto: systemd riavvia
+#   EXIT_OK (0)         terminazione richiesta (systemd stop)
+#   EXIT_CRITICAL (7)   errore critico bisync: richiesto --resync manuale
+#   EXIT_TEMPFAIL (75)  watcher sospeso (marker BLOCKED_FILE presente)
+#   EXIT_ERROR (1)      errore imprevisto: systemd riavvia
 
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "${SCRIPT_DIR}/lib/common.sh"
 
 LOCAL_PATH="${1:-}"
 REMOTE_PATH="${2:-}"
@@ -23,92 +30,60 @@ BACKOFF_START="${BACKOFF_START:-10}"
 BACKOFF_MAX="${BACKOFF_MAX:-300}"
 BISYNC_SCRIPT="${BISYNC_SCRIPT:-/home/frankel/.bin/rclone_bisync.sh}"
 
+LOG_TAG="WATCH"
+
 if [ -z "$LOCAL_PATH" ] || [ -z "$REMOTE_PATH" ]; then
-    echo "Uso: $0 <dir_locale> <remote:path> [debounce_secondi]"
-    exit 1
+    log_error "Uso: $0 <dir_locale> <remote:path> [debounce_secondi]"
+    exit "$EXIT_ERROR"
 fi
 
-# Pulisce l'ambiente da librerie potenzialmente "inquinanti"
-unset LD_LIBRARY_PATH
+REMOTE_NAME="$(remote_name_of "$REMOTE_PATH")"
+NOTIFY_TITLE="Rclone watcher ${REMOTE_NAME:-?}"
+NOTIFY_APP="Rclone Watcher"
 
-# --- Variabili derivate ---
-REMOTE_NAME=$(echo "$REMOTE_PATH" | cut -d':' -f1)
-CONF_DIR="/home/frankel/.config/rclone/conf_dir_${REMOTE_NAME}"
-WATCHER_LOG="${CONF_DIR}/log_files/watcher-${REMOTE_NAME}.log"
-BLOCKED_FILE="${CONF_DIR}/lock_files/bisync-${REMOTE_NAME}.blocked"
+CONF_DIR="$(conf_dir_for "$REMOTE_NAME")"
+LOG_FILES_DIR="$(log_dir_for "$REMOTE_NAME")"
+LOCK_FILES_DIR="$(lock_dir_for "$REMOTE_NAME")"
+WATCHER_LOG="${LOG_FILES_DIR}/watcher-${REMOTE_NAME}.log"
+BLOCKED_FILE="$(blocked_file_for "$REMOTE_NAME")"
+FIFO="${LOCK_FILES_DIR}/watcher-${REMOTE_NAME}.fifo"
 
 # modify: resetta il debounce anche durante scritture lunghe
 # create/delete/moved_*: nuove directory, cancellazioni, rename
 # attrib: permessi/attributi
 EVENTI="modify,close_write,create,delete,moved_to,moved_from,attrib"
 
-# --- Notification Function (stesso trucco DBUS degli script principali) ---
-send_notification() {
-    local error_msg="$1"
-    if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
-    fi
-    notify-send -u normal \
-                -i dialog-error \
-                -a "Rclone Watcher" \
-                "Rclone Watcher Error: ${REMOTE_NAME}" \
-                "$error_msg" || true
+log_watcher() { # messaggio: record INFO, solo file
+    log_line "$WATCHER_LOG" "$*"
 }
 
-log_watcher() {
-    echo "[$(date)] $1" >> "$WATCHER_LOG" 2>&1 || true
+log_watcher_at() { # livello, messaggio: record nel file; da WARN anche sul journal
+    local level="$1"
+    shift
+    log_line_at "$WATCHER_LOG" "$level" "$*"
+    case "$level" in
+        WARN|ERROR|CRITICAL) log_text "$level" "$*" ;;
+    esac
 }
 
-# Attende che non ci siano file aperti nella directory locale.
-# Il polling è voluto: non si aspetta un nuovo evento inotify, così la sync
-# riparte appena l'ultimo file viene chiuso.
-# Ritorna 1 se il limite LSOF_MAX_WAIT viene superato.
-attendi_file_chiusi() {
-    command -v lsof >/dev/null 2>&1 || return 0
-
-    local inizio=$SECONDS
-    local aperti
-
-    # Nota: ';' e non '&&'. lsof può restituire un exit code non-zero anche
-    # quando stampa file aperti, quindi il test su $aperti va sempre eseguito.
-    while aperti=$(lsof +D "$LOCAL_PATH" 2>/dev/null); [ -n "$aperti" ]; do
-        if [ $((SECONDS - inizio)) -ge "$LSOF_MAX_WAIT" ]; then
-            log_watcher "File aperti dopo ${LSOF_MAX_WAIT}s: rinvio"
-            return 1
-        fi
-        log_watcher "File aperti: attendo ${LSOF_POLL}s"
-        sleep "$LSOF_POLL"
-    done
-
-    return 0
-}
-
-# --- Prerequisito: inotifywait ---
-if ! command -v inotifywait >/dev/null 2>&1; then
-    ERR_MSG="inotifywait non trovato. Installare inotify-tools (sudo dnf install inotify-tools)."
-    echo "$ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-# --- Verifica esistenza directory locale ---
-if [ ! -d "$LOCAL_PATH" ]; then
-    ERR_MSG="Directory locale '$LOCAL_PATH' non trovata."
-    echo "$ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-# --- Crea file di log e directory (log e lock) se mancanti ---
-mkdir -p "$CONF_DIR/log_files" "$CONF_DIR/lock_files" 2>/dev/null || true
+# --- Preparazione ---
+ensure_runtime_dirs
 touch "$WATCHER_LOG" 2>/dev/null || true
 
-if [ -f "$BLOCKED_FILE" ]; then
+if ! command -v inotifywait >/dev/null 2>&1; then
+    MSG="inotifywait non trovato. Installare inotify-tools (sudo dnf install inotify-tools)."
+    log_watcher_at ERROR "$MSG"
+    send_notification "$MSG" ERROR
+    exit "$EXIT_ERROR"
+fi
+
+require_local_dir "$LOCAL_PATH"
+
+if is_blocked "$BLOCKED_FILE"; then
     MSG="Watcher sospeso: presente $BLOCKED_FILE. Eseguire un --resync manuale e rimuovere il file."
-    echo "$MSG" >&2
-    log_watcher "$MSG"
-    send_notification "$MSG"
-    exit 75
+    log_watcher_at CRITICAL "$MSG"
+    send_notification "$MSG" CRITICAL
+    exit "$EXIT_TEMPFAIL"
 fi
 
 log_watcher "Avviato: ${LOCAL_PATH} -> ${REMOTE_PATH} (debounce=${DEBOUNCE}s, min_interval=${MIN_INTERVAL}s, eventi=${EVENTI})"
@@ -118,17 +93,20 @@ backoff="$BACKOFF_START"
 
 # FIFO + inotifywait in background: il loop resta nella shell principale,
 # quindi "exit" funziona e il processo inotifywait viene terminato dal trap.
-FIFO="${CONF_DIR}/lock_files/watcher-${REMOTE_NAME}.fifo"
 rm -f "$FIFO"
 if ! mkfifo "$FIFO"; then
-    MSG="Impossibile creare la FIFO $FIFO"
-    echo "$MSG" >&2
-    log_watcher "$MSG"
-    send_notification "$MSG"
-    exit 1
+    MSG="Impossibile creare la FIFO $FIFO."
+    log_watcher_at ERROR "$MSG"
+    send_notification "$MSG" ERROR
+    exit "$EXIT_ERROR"
 fi
 
-inotifywait -m -r -e "$EVENTI" --format '%w%f' "$LOCAL_PATH" 2>>"$WATCHER_LOG" > "$FIFO" &
+# Lo stderr di inotifywait passa dallo stesso formato degli altri record.
+inotifywait -m -r -e "$EVENTI" --format '%w%f' "$LOCAL_PATH" 2> >(
+    while IFS= read -r line; do
+        log_line_at "$WATCHER_LOG" WARN "inotifywait: $line"
+    done
+) > "$FIFO" &
 INOTIFY_PID=$!
 
 cleanup() {
@@ -150,7 +128,8 @@ while IFS= read -r -u 3 changed_path; do
     done
 
     # Gate file aperti: polling, non attesa di un nuovo evento.
-    if ! attendi_file_chiusi; then
+    if ! wait_for_no_open_files "$LOCAL_PATH" "$LSOF_POLL" "$LSOF_MAX_WAIT" "$WATCHER_LOG"; then
+        log_watcher_at WARN "File aperti oltre ${LSOF_MAX_WAIT}s: run rinviata."
         backoff="$BACKOFF_START"
         continue
     fi
@@ -169,28 +148,28 @@ while IFS= read -r -u 3 changed_path; do
     rc=$?
 
     case "$rc" in
-        0)
-            log_watcher "bisync completata"
+        "$EXIT_OK")
+            log_watcher "bisync completata (exit 0)."
             backoff="$BACKOFF_START"
             ;;
-        75)
-            log_watcher "bisync rinviata (75): retry tra ${backoff}s"
+        "$EXIT_TEMPFAIL")
+            log_watcher "bisync rinviata (exit 75): retry tra ${backoff}s."
             sleep "$backoff"
             backoff=$(( backoff * 2 > BACKOFF_MAX ? BACKOFF_MAX : backoff * 2 ))
             ;;
-        7)
-            log_watcher "ERRORE CRITICO (7): richiesto --resync manuale"
-            send_notification "Bisync in errore critico: eseguire --resync manuale, poi rimuovere ${BLOCKED_FILE}."
-            : > "$BLOCKED_FILE"
-            exit 7
+        "$EXIT_CRITICAL")
+            log_watcher_at CRITICAL "Bisync in errore critico (exit 7): richiesto --resync manuale, watcher sospeso."
+            send_notification "Bisync in errore critico: eseguire --resync manuale, poi rimuovere ${BLOCKED_FILE}." CRITICAL
+            mark_blocked "$BLOCKED_FILE"
+            exit "$EXIT_CRITICAL"
             ;;
         *)
-            log_watcher "bisync fallita (rc=${rc}): retry tra ${backoff}s"
+            log_watcher_at WARN "bisync fallita (exit ${rc}): retry tra ${backoff}s."
             sleep "$backoff"
             backoff=$(( backoff * 2 > BACKOFF_MAX ? BACKOFF_MAX : backoff * 2 ))
             ;;
     esac
 done
 
-log_watcher "inotifywait terminato: uscita"
-exit 1
+log_watcher_at WARN "inotifywait terminato: uscita."
+exit "$EXIT_ERROR"

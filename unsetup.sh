@@ -25,12 +25,18 @@ SYSTEMD_USER_FOLDER="${HOME_DIR}/.config/systemd/user"
 echo "Stop dei timer systemd user per ${TARGET_USER}..."
 sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user stop \
     rclone-bisync@gdrive-f4frank.timer \
+    rclone-bisync@gdrive-pro.timer \
+    rclone-sync@f4frank-to-mega.timer \
+    rclone-sync@pro-to-mega.timer \
     rclone-sync@drive-to-drive.timer \
     rclone-sync@drive-to-mega.timer 2>/dev/null || true
 
 echo "Disable dei timer systemd user per ${TARGET_USER}..."
 sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disable \
     rclone-bisync@gdrive-f4frank.timer \
+    rclone-bisync@gdrive-pro.timer \
+    rclone-sync@f4frank-to-mega.timer \
+    rclone-sync@pro-to-mega.timer \
     rclone-sync@drive-to-drive.timer \
     rclone-sync@drive-to-mega.timer 2>/dev/null || true
 
@@ -38,9 +44,11 @@ sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disab
 # 2. Stop e disable watcher realtime
 # =============================================================================
 
-echo "Stop del watcher realtime per ${TARGET_USER}..."
-sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user stop rclone-bisync-watcher@gdrive-f4frank.service 2>/dev/null || true
-sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disable rclone-bisync-watcher@gdrive-f4frank.service 2>/dev/null || true
+echo "Stop dei watcher realtime per ${TARGET_USER}..."
+for instance in gdrive-f4frank gdrive-pro; do
+    sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user stop "rclone-bisync-watcher@${instance}.service" 2>/dev/null || true
+    sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disable "rclone-bisync-watcher@${instance}.service" 2>/dev/null || true
+done
 
 # =============================================================================
 # 3. Rimozione file di logrotate (con sudo)
@@ -49,7 +57,9 @@ sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disab
 LOGROTATE_DIR="/etc/logrotate.d"
 
 echo "Rimozione file di logrotate da ${LOGROTATE_DIR}..."
-for instance in bisync_gdrive-f4frank sync_drive-to-drive sync_drive-to-mega watcher_gdrive-f4frank; do
+for instance in bisync_gdrive-f4frank bisync_gdrive-pro watcher_gdrive-f4frank watcher_gdrive-pro \
+                sync_f4frank-to-mega sync_pro-to-mega \
+                sync_drive-to-drive sync_drive-to-mega; do
     logrotate_file="${LOGROTATE_DIR}/rclone_${instance}"
     if [ -f "$logrotate_file" ]; then
         rm -f "$logrotate_file" && echo "  Rimosso: $logrotate_file"
@@ -65,8 +75,9 @@ for old_file in rclone_bisync_GDrive-F4Frank rclone_sync_GDrive-F4Frank; do
     fi
 done
 
-# Rimuove eventuali marker di blocco lasciati dal watcher
+# Rimuove eventuali marker di blocco lasciati dai watcher
 rm -f "$HOME_DIR/.config/rclone/conf_dir_GDrive-F4Frank/lock_files/"*.blocked 2>/dev/null || true
+rm -f "$HOME_DIR/.config/rclone/conf_dir_GDrive-Pro/lock_files/"*.blocked 2>/dev/null || true
 
 # =============================================================================
 # 3. Ricaricamento systemd --user dopo rimozione unità
@@ -103,6 +114,22 @@ echo "Rimozione degli script rclone e watcher da $BIN_FOLDER..."
 rm -f "$BIN_FOLDER/rclone_bisync.sh"
 rm -f "$BIN_FOLDER/rclone_sync.sh"
 rm -f "$BIN_FOLDER/rclone_watch_bisync.sh"
+rm -f "$BIN_FOLDER/lib/common.sh"
+rmdir "$BIN_FOLDER/lib" 2>/dev/null || true
+
+# =============================================================================
+# 6b. Rimozione del file di esclusione installato da setup.sh
+# =============================================================================
+
+echo "Rimozione del file di esclusione da $HOME_DIR/.config/rclone..."
+EXCLUDE_FILE="$HOME_DIR/.config/rclone/exclude_patterns.txt"
+if [ -f "${EXCLUDE_FILE}.bak" ]; then
+    mv -f "${EXCLUDE_FILE}.bak" "$EXCLUDE_FILE"
+    echo "  Ripristinata la versione precedente da ${EXCLUDE_FILE}.bak"
+elif [ -f "$EXCLUDE_FILE" ]; then
+    rm -f "$EXCLUDE_FILE"
+    echo "  Rimosso: $EXCLUDE_FILE"
+fi
 
 # =============================================================================
 # 7. Rimozione wrapper da /etc/cron.daily/
@@ -124,15 +151,13 @@ rm -f "$AUTOSTART_FOLDER/login_rclone_bisync.desktop"
 # =============================================================================
 
 echo "Verifica crontab utente ${TARGET_USER}..."
-CRONTAB_FILE="legacy/crontab.txt"
+LEGACY_CRON_MARKERS=(".bin/rclone_bisync.sh" ".bin/rclone_sync.sh")
 if crontab -u "$TARGET_USER" -l 2>/dev/null | grep -q .; then
-    if [ -f "$CRONTAB_FILE" ]; then
-        REMOVE_PATTERNS_FILE=$(mktemp)
-        grep -v '^[[:space:]]*#' "$CRONTAB_FILE" | grep -v '^[[:space:]]*$' > "$REMOVE_PATTERNS_FILE"
-        crontab -u "$TARGET_USER" -l 2>/dev/null | grep -v -F -f "$REMOVE_PATTERNS_FILE" | crontab -u "$TARGET_USER" -
-        rm -f "$REMOVE_PATTERNS_FILE"
-        echo "Crontab aggiornato per ${TARGET_USER} (righe rclone rimosse)."
-    fi
+    REMOVE_PATTERNS_FILE=$(mktemp)
+    printf '%s\n' "${LEGACY_CRON_MARKERS[@]}" > "$REMOVE_PATTERNS_FILE"
+    crontab -u "$TARGET_USER" -l 2>/dev/null | grep -v -F -f "$REMOVE_PATTERNS_FILE" | crontab -u "$TARGET_USER" -
+    rm -f "$REMOVE_PATTERNS_FILE"
+    echo "Crontab aggiornato per ${TARGET_USER} (righe rclone rimosse)."
 else
     echo "Nessun crontab presente per ${TARGET_USER}."
 fi

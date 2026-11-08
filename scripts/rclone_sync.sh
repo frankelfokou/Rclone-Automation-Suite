@@ -1,255 +1,110 @@
 #!/bin/bash
-
-# CRONTAB EXAMPLE:
-# */15 * * * * /path/to/script.sh GDrive-F4Frank RemoteName:CartellaRemota
+#
+# rclone_sync.sh — orchestrazione di `rclone sync` remoto → remoto.
+# Responsabilità: validare sorgente e destinazione, invocare i lock, eseguire
+# sync e gestire gli errori.
+# Le responsabilità condivise con rclone_bisync.sh sono in scripts/lib/common.sh.
 
 set -e
 set -o pipefail
 
-# Pulisce l'ambiente da librerie potenzialmente "inquinanti"
-unset LD_LIBRARY_PATH
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "${SCRIPT_DIR}/lib/common.sh"
 
-# --- Notification Function ---
-send_notification() {
-    local error_msg="$1"
-    
-    # TRUCCO PER CRON / SYSTEMD:
-    # Se lo script è lanciato in background, potrebbe non sapere dove mandare la notifica.
-    # Su Fedora (systemd), il bus dell'utente si trova sempre qui:
-    if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+SOURCE_PATH="${1:-}"
+DEST_PATH="${2:-}"
+USAGE="Uso: $0 <sorgente_remota> <destinazione_remota>"
+
+REMOTE_NAME="$(remote_name_of "$SOURCE_PATH")"
+DEST_REMOTE_NAME="$(remote_name_of "$DEST_PATH")"
+LOG_TAG="SYNC"
+NOTIFY_TITLE="Rclone sync ${REMOTE_NAME:-?} -> ${DEST_REMOTE_NAME:-?}"
+NOTIFY_APP="Rclone Script"
+
+require_args "$#" 2 "$USAGE"
+require_remote_path "$SOURCE_PATH" "SOURCE_PATH" "$USAGE"
+require_remote_path "$DEST_PATH" "DEST_PATH" "$USAGE"
+require_configured_remote "$REMOTE_NAME"
+require_configured_remote "$DEST_REMOTE_NAME"
+
+init_rclone_paths "$REMOTE_NAME" "sync" \
+    "sync-${REMOTE_NAME}_to_${DEST_REMOTE_NAME}.log"
+ensure_runtime_dirs
+ensure_log_file
+redirect_output_to_log
+
+# La safety check locale è applicabile solo se SOURCE è una directory locale.
+# Con la validazione attuale SOURCE deve contenere ':', quindi il ramo è di
+# fatto non raggiungibile; resta per compatibilità futura.
+if [[ "$SOURCE_PATH" != *:* ]] && [ -d "$SOURCE_PATH" ]; then
+    log_info "Inizio safety check LSOF per file aperti"
+    if ! wait_for_no_open_files "$SOURCE_PATH" "$LSOF_WAIT_SECONDS" \
+            "$((LSOF_WAIT_SECONDS * LSOF_MAX_RETRIES))"; then
+        exit "$EXIT_TEMPFAIL"
     fi
-
-    # Invia la notifica
-    # -u normal: La notifica scompare dopo un timeout e va nel centro notifiche
-    # -i dialog-error: Icona di errore standard
-    notify-send -u normal \
-                -i dialog-error \
-                -a "Rclone Script" \
-                "Rclone Sync Error: ${SOURCE_PATH} -> ${DEST_PATH}" \
-                "$error_msg" || true
-}
-
-log_message() {
-    if [ "$DEBUG_MODE" -eq 1 ]; then
-        echo "$1" >&2
-    fi
-    # In modalità normale, l'output viene implicitamente scartato perché non c'è un echo.
-}
-
-# --- Debug Mode & Conditional Logging ---
-DEBUG_MODE=0 
-
-if [ "$DEBUG_MODE" == "1" ]; then
-    echo "--- DEBUG MODE ENABLED: L'output verrà mostrato a schermo e non nel file di log. ---"
-fi
-
-# --- Configuration & Arguments ---
-SOURCE_PATH="$1"
-DEST_PATH="$2"
-
-# Controllo del numero di argomenti
-if [ "$#" -ne 2 ]; then
-    ERR_MSG="Numero di argomenti non corretto.
-Uso: $0 <sorgente_locale> <destinazione_remota>"
-    log_message "Errore: $ERR_MSG"
-    # Chiamata dopo aver definito SOURCE_PATH e DEST_PATH
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-################## SOURCE ##################
-
-# Controllo formato del remote
-if [[ ! "$SOURCE_PATH" == *":"* ]]; then
-    ERR_MSG="Il percorso remoto '$SOURCE_PATH' non sembra valido (manca ':')."
-    log_message "Errore: $ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-# Controlla l'esistenza del remote
-REMOTE_NAME=$(echo "$SOURCE_PATH" | cut -d':' -f1)
-if ! /usr/bin/rclone listremotes | grep -q "^${REMOTE_NAME}:"; then
-    ERR_MSG="Il remote '$REMOTE_NAME' non è configurato in rclone."
-    log_message "Errore: $ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-############################################
-
-################## DEST ####################
-
-# Controllo formato del remote
-if [[ ! "$DEST_PATH" == *":"* ]]; then
-    ERR_MSG="Il percorso remoto '$DEST_PATH' non sembra valido (manca ':')."
-    log_message "Errore: $ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-# Controlla l'esistenza del remote
-DEST_REMOTE_NAME=$(echo "$DEST_PATH" | cut -d':' -f1)
-if ! /usr/bin/rclone listremotes | grep -q "^${DEST_REMOTE_NAME}:"; then
-    ERR_MSG="Il remote '$DEST_REMOTE_NAME' non è configurato in rclone."
-    log_message "Errore: $ERR_MSG"
-    send_notification "$ERR_MSG"
-    exit 1
-fi
-
-#############################################
-
-CONF_DIR="/home/frankel/.config/rclone/conf_dir_${REMOTE_NAME}"
-LOCK_FILE_SYNC="${CONF_DIR}/lock_files/sync-${REMOTE_NAME}.lock" 
-LOCK_FILE_REMOTE="${CONF_DIR}/lock_files/remote-${REMOTE_NAME}.lock"
-LOG_FILE="${CONF_DIR}/log_files/sync-${REMOTE_NAME}_to_${DEST_REMOTE_NAME}.log"
-
-# Controlla e crea la directory di configurazione se non esiste.
-if [ ! -d "$CONF_DIR" ]; then
-    log_message "La directory di configurazione '$CONF_DIR' non esiste. Tentativo di creazione..."
-    if ! mkdir -p "$CONF_DIR"; then
-        # Se la creazione fallisce, invia una notifica ed esce.
-        ERR_MSG="Impossibile creare la directory di configurazione: '$CONF_DIR'. Controllare i permessi."
-        log_message "ERRORE CRITICO: $ERR_MSG"
-        send_notification "$ERR_MSG"
-        exit 1
-    fi
-fi
-
-# Controlla che il file di log esista
-if [ ! -f "$LOG_FILE" ]; then
-    if ! touch "$LOG_FILE"; then
-        ERR_MSG="Impossibile creare il file di log: '$LOG_FILE'. Controllare i permessi."
-        echo "ERRORE CRITICO: $ERR_MSG"
-        send_notification "$ERR_MSG"
-        exit 1
-    fi
-fi
-
-# --- LOG REDIRECTION ---
-if [ "$DEBUG_MODE" -eq 0 ]; then
-    # In modalità normale (cron), reindirizza tutto l'output al file di log.
-    exec >> "$LOG_FILE" 2>&1
-fi
-
-
-# ------------------------------------------------------------------------------
-# SAFETY CHECK: BUSY WAIT (Prima dei Lock)
-# ------------------------------------------------------------------------------
-# Lo mettiamo QUI, fuori dai lock.
-# Motivo: Se entriamo in un loop di attesa dentro il "flock 201" (che è bloccante),
-# i successivi job di cron (es. tra 15 min) si accoderebbero restando appesi in RAM.
-# Facendo il controllo qui, se c'è un file aperto, lo script aspetta o esce
-# senza bloccare la coda dei lock per il futuro.
-
-WAIT_SECONDS=10
-MAX_RETRIES=18 # 18 * 10s = 3 minuti di attesa massima
-
-# Determina se la SOURCE è un path locale (senza ":")
-if [[ ! "$SOURCE_PATH" == *":"* ]] && [ -d "$SOURCE_PATH" ]; then
-    echo "[$(date)] Inizio safety check LSOF per file aperti" >&2
-    if command -v lsof >/dev/null 2>&1; then
-        retry_count=0
-
-        # Ciclo finché lsof trova file aperti (exit code 0 = trovati)
-        while open_files=$(lsof +D "$SOURCE_PATH" 2>/dev/null); [ -n "$open_files" ]; do
-            log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
-            if [ "$retry_count" -ge "$MAX_RETRIES" ]; then
-                echo "[$(date)] SKIP: File aperti rilevati dopo $((MAX_RETRIES * WAIT_SECONDS))s. Rinuncio per questo giro."
-                echo "[$(date)] I seguenti file erano ancora aperti:" >&2
-                echo "$open_files" >&2
-                # Usciamo con 0 per non allarmare cron, riproveremo tra 10 min
-                exit 0
-            fi
-
-            log_message "File in uso rilevati. Attesa ${WAIT_SECONDS}s... ($((retry_count+1))/$MAX_RETRIES). File aperti:"
-            log_message "$(echo "$open_files" | awk 'NR>1 {print " - " $9}')"
-            sleep "$WAIT_SECONDS"
-            ((++retry_count))
-        done
-    fi
-    echo "[$(date)] Safety check LSOF avvenuto con successo" >&2
-
-    # Controllo aggiuntivo per modifiche recenti (se lsof non vede tutto o se lsof non c'è)
-    # Aspetta se un file è stato toccato negli ultimi 60 secondi
-    echo "[$(date)] Inizio safety check FIND per modifiche nell'ultimo minuto" >&2
-    if find "$SOURCE_PATH" -type f -mmin -1 -print -quit 2>/dev/null | grep -q .; then
-        echo "[$(date)] SKIP: Modifiche file rilevate nell'ultimo minuto. Lascio stabilizzare."
-        exit 0
-    fi
-    echo "[$(date)] Safety check FIND avvenuto con successo" >&2
+    log_info "Safety check LSOF avvenuto con successo"
 else
-    echo "[$(date)] SKIP: Safety check LSOF/FIND non applicabile (SOURCE è un remote o directory non locale)." >&2
+    log_warn "Safety check LSOF/FIND non applicabile: SOURCE è un remote o una directory non locale."
 fi
 
-# ------------------------------------------------------------------------------
-# FINE SAFETY CHECK
-# ------------------------------------------------------------------------------
+RCLONE_CMD=(
+    "$RCLONE_BIN" sync "$SOURCE_PATH" "$DEST_PATH"
+    --exclude-from "$RCLONE_EXCLUDE_FILE"
+    --create-empty-src-dirs
+    --fast-list
+    --drive-stop-on-upload-limit
+    --checkers=32
+    --transfers=16
+    --drive-chunk-size=128M
+    --drive-pacer-min-sleep=10ms
+    -v
+)
 
-# --- Main Logic with Locking ---
-( # Nuovo lock BLOKKANTE per il remote (FD 201)
-    # Attende se un altro script sta usando lo stesso remote.
+handle_sync_failure() {
+    local msg last_err full_err
 
-    echo "[$(date)] Tentativo di aquisizione lock generale per ${REMOTE_NAME}" >&2
-    flock -n 201 || {
-        echo "[$(date)] Lock generale per ${REMOTE_NAME} già occupato da un altro processo. Uscita." >&2
-        exit 1
-    }
+    log_error "Rclone sync fallito (exit ${RCLONE_RC})."
+    log_text ERROR "$RCLONE_OUTPUT"
+    log_info "Avvio analisi delle cause."
 
-    ( # Lock NON-BLOKKANTE esistente per bisync (FD 200)
-        # Acquire an exclusive lock on file descriptor 200.
+    if ! remote_is_reachable "$REMOTE_NAME"; then
+        msg="Remote '${REMOTE_NAME}' non raggiungibile. Controllare la connessione o il token."
+        log_error "$msg"
+        send_notification "$msg" ERROR
+        exit "$EXIT_ERROR"
+    fi
 
-        echo "[$(date)] Tentativo di aquisizione lock specifico per sync per ${REMOTE_NAME}" >&2
-        flock -n 200 || {
-            echo "[$(date)] Script sync già in esecuzione per ${REMOTE_NAME}. Uscita." >&2
-            exit 1
-        }
+    last_err=$(printf '%s\n' "$RCLONE_OUTPUT" | tail -n 3)
+    full_err="Rclone sync fallito.
+Ultime righe di rclone:
+${last_err}"
+    send_notification "$full_err" ERROR
+    exit "$EXIT_ERROR"
+}
 
-        echo "[$(date)] Lock sync acquisito. Avvio rclone sync per ${REMOTE_NAME}." >&2
-        
-        RCLONE_CMD=(
-            /usr/bin/rclone sync "$SOURCE_PATH" "$DEST_PATH"
-            --exclude-from /home/frankel/.config/rclone/exclude_patterns.txt
-            --create-empty-src-dirs     
-            --fast-list
-            --drive-stop-on-upload-limit
-            --checkers=32
-            --transfers=16
-            --drive-chunk-size=128M
-            --drive-pacer-min-sleep=10ms
-            -v
-        )
+(
+    log_info "Tentativo di acquisizione lock generale per ${REMOTE_NAME}"
+    if ! acquire_remote_lock; then
+        log_warn "Rinvio (exit 75): lock generale occupato per ${REMOTE_NAME} (attesa ${LOCK_WAIT}s)."
+        exit "$EXIT_TEMPFAIL"
+    fi
 
-        # --- Esecuzione ---
-        if ! RCLONE_OUTPUT=$("${RCLONE_CMD[@]}" 2>&1); then
-            # --- GESTIONE ERRORE ---
-            echo "[$(date)] Rclone sync fallito." >&2
-            echo "${RCLONE_OUTPUT}" >&2
-
-            echo "[$(date)] Analisi cause..." >&2
-
-            # 1. Check Connettività
-            if ! /usr/bin/rclone about "${REMOTE_NAME}:" &>/dev/null; then
-                ERR="Remote '${REMOTE_NAME}' non raggiungibile. Controllare internet/token."
-                echo "[$(date)] CRITICAL: $ERR" >&2
-                send_notification "$ERR"
-                exit 1
-            fi
-
-            # Se siamo qui, è un errore generico non risolto
-            LAST_ERR=$(echo "$RCLONE_OUTPUT" | tail -n 3)
-            FULL_ERR="Rclone Sync Failed!
-Dettagli:
-$LAST_ERR"
-            send_notification "$FULL_ERR"
-            exit 1
-
-        else
-            # --- Successo ---
-            echo "[$(date)] Rclone sync completato con successo." >&2
-            echo "${RCLONE_OUTPUT}" >&2
+    (
+        log_info "Tentativo di acquisizione lock specifico per sync per ${REMOTE_NAME}"
+        if ! acquire_operation_lock; then
+            log_warn "Rinvio (exit 75): sync già in esecuzione per ${REMOTE_NAME}."
+            exit "$EXIT_TEMPFAIL"
         fi
-    ) 200>"${LOCK_FILE_SYNC}"
 
-) 201>"${LOCK_FILE_REMOTE}"
+        log_info "Lock sync acquisito. Avvio rclone sync per ${REMOTE_NAME}."
+
+        run_rclone "${RCLONE_CMD[@]}"
+        if [ "$RCLONE_RC" -ne 0 ]; then
+            handle_sync_failure
+        else
+            log_info "Rclone sync completato (exit 0)."
+            log_text INFO "$RCLONE_OUTPUT"
+        fi
+    ) 200>"$LOCK_FILE_OPERATION"
+) 201>"$LOCK_FILE_REMOTE"

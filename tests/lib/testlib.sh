@@ -102,6 +102,23 @@ count_lines() { # file
     fi
 }
 
+# Apre un file in lettura o un lock in scrittura e lo tiene aperto.
+# Imposta HOLDER_PID (il chiamante può fare kill/wait).
+HOLDER_PID=""
+hold_fd() { # file, modalità (r/w), secondi
+    local file="$1"
+    local mode="$2"
+    local seconds="$3"
+
+    if [ "$mode" = "r" ]; then
+        bash -c 'exec 9<"'"$file"'"; sleep '"$seconds" >/dev/null 2>&1 &
+    else
+        bash -c 'exec 9>"'"$file"'"; flock -n 9; sleep '"$seconds" >/dev/null 2>&1 &
+    fi
+
+    HOLDER_PID=$!
+}
+
 wait_until() { # comando, timeout_sec, messaggio
     local cmd="$1"
     local timeout="$2"
@@ -121,10 +138,13 @@ wait_until() { # comando, timeout_sec, messaggio
     return 1
 }
 
-# Crea un albero di test con stub di rclone, copie derivate degli script,
-# stub del bisync per il watcher e directory di log/lock.
+# Crea un albero di test con stub di rclone, copie degli entrypoint e del
+# modulo condiviso, stub del bisync per il watcher e directory di log/lock.
+#
+# I moduli usano RCLONE_BIN, RCLONE_CONFIG_DIR, RCLONE_EXCLUDE_FILE e
+# NOTIFY_ENABLED: il fixture li esporta, quindi non serve riscrivere i file.
 setup_bisync_fixture() {
-    mkdir -p "$TEST_TMP/bin" "$TEST_TMP/src" "$TEST_TMP/logs" \
+    mkdir -p "$TEST_TMP/bin" "$TEST_TMP/src" "$TEST_TMP/logs" "$TEST_TMP/lib" \
              "$TEST_TMP/conf/conf_dir_tst/log_files" \
              "$TEST_TMP/conf/conf_dir_tst/lock_files"
 
@@ -133,9 +153,9 @@ setup_bisync_fixture() {
 case "$1" in
   listremotes) printf 'tst:\n'; exit 0 ;;
   about) exit "${STUB_ABOUT_RC:-0}" ;;
-  lsf) exit 0 ;;
+  lsf) printf 'RCLONE_TEST\n'; exit 0 ;;
   touch) exit 0 ;;
-  bisync)
+  bisync|sync)
       n=$(cat "${COUNT_FILE:-/dev/null}" 2>/dev/null || echo 0)
       n=$((n + 1))
       echo "$n" > "${COUNT_FILE:-/dev/null}"
@@ -149,16 +169,17 @@ esac
 EOS
     chmod +x "$TEST_TMP/bin/rclone"
 
-    sed -e "s|/usr/bin/rclone|$TEST_TMP/bin/rclone|g" \
-        -e "s|/home/frankel/.config/rclone|$TEST_TMP/conf|g" \
-        -e "s|notify-send|true|g" \
-        "$REPO_ROOT/scripts/rclone_bisync.sh" > "$TEST_TMP/bisync.sh"
-    chmod +x "$TEST_TMP/bisync.sh"
+    # Copia i moduli reali: ogni entrypoint carica $SCRIPT_DIR/lib/common.sh.
+    cp "$REPO_ROOT/scripts/lib/common.sh" "$TEST_TMP/lib/common.sh"
+    cp "$REPO_ROOT/scripts/rclone_bisync.sh" "$TEST_TMP/bisync.sh"
+    cp "$REPO_ROOT/scripts/rclone_sync.sh" "$TEST_TMP/sync.sh"
+    cp "$REPO_ROOT/scripts/rclone_watch_bisync.sh" "$TEST_TMP/watch.sh"
+    chmod +x "$TEST_TMP/bisync.sh" "$TEST_TMP/sync.sh" "$TEST_TMP/watch.sh"
 
-    sed -e "s|/home/frankel/.config/rclone|$TEST_TMP/conf|g" \
-        -e "s|notify-send|true|g" \
-        "$REPO_ROOT/scripts/rclone_watch_bisync.sh" > "$TEST_TMP/watch.sh"
-    chmod +x "$TEST_TMP/watch.sh"
+    export RCLONE_BIN="$TEST_TMP/bin/rclone"
+    export RCLONE_CONFIG_DIR="$TEST_TMP/conf"
+    export RCLONE_EXCLUDE_FILE="$TEST_TMP/conf/exclude_patterns.txt"
+    export NOTIFY_ENABLED=0
 
     cat > "$TEST_TMP/stub_bisync.sh" <<EOS
 #!/bin/bash

@@ -1,0 +1,19 @@
+# Esclusioni comuni a tutti gli script (passate a rclone con --exclude-from).
+# Un pattern per riga; le modifiche valgono dal run successivo.
+#
+# Sintassi rclone: glob, non regex.
+#   Cartella/            esclude la cartella e tutto il suo contenuto
+#   *.tmp                esclude per estensione, a qualsiasi livello
+#   **/Cartella/**       esclude una cartella con quel nome a qualsiasi livello
+#
+# I pattern sono relativi alla radice di ogni albero: la cartella locale
+# (Path1) e il remote (Path2) di bisync, sorgente e destinazione di sync.
+
+Google AI Studio/
+Gemini Gems/
+Voyager Data/
+
+# Repository git: la storia delle revisioni resta solo in locale.
+# Senza slash iniziale il pattern vale a qualsiasi livello dell'albero, quindi
+# copre sia la radice sia le sottocartelle (vault Obsidian incluso).
+.git/
