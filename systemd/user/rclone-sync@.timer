@@ -3,13 +3,15 @@ Description=Timer per rclone sync (istanza %i)
 Documentation=man:systemd.timer(5)
 
 [Timer]
-# Avvio 5 minuti dopo il boot
-OnBootSec=5min
-# Esecuzione giornaliera (sostituisce wrapper /etc/cron.daily)
+# Avvio 10 minuti dopo il boot
+OnBootSec=10min
+# Backup giornaliero dei remote verso Mega (sostituisce i wrapper in cron.daily)
 OnCalendar=daily
-# Unità da avviare
+# Spalma le due istanze (f4frank e pro) per non farle partire insieme.
+RandomizedDelaySec=15min
+AccuracySec=1min
 Unit=rclone-sync@%i.service
-# Non riusare se il sistema era spento all'ora prevista
+# Recupera il run perso se il sistema era spento all'ora prevista
 Persistent=true
 
 [Install]

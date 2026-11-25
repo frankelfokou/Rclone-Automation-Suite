@@ -16,8 +16,19 @@ SKIP_COUNT=0
 FAILED_NAMES=()
 BG_PIDS=()
 
+# Le subshell (command substitution, job in background, parentesi) ereditano
+# il trap EXIT/INT/TERM: senza questo controllo una subshell che termina
+# eseguirebbe cleanup e cancellerebbe la directory temporanea mentre il test
+# sta ancora girando. Solo la shell principale del test può ripulire.
+TEST_SHELL_PID="${BASHPID:-$$}"
+CLEANED=0
+
 cleanup() {
     local pid
+    [ "${BASHPID:-$$}" = "$TEST_SHELL_PID" ] || return 0
+    [ "$CLEANED" -eq 1 ] && return 0
+    CLEANED=1
+
     if [ "${#BG_PIDS[@]}" -gt 0 ]; then
         for pid in "${BG_PIDS[@]}"; do
             kill "$pid" 2>/dev/null || true
@@ -153,12 +164,29 @@ setup_bisync_fixture() {
 case "$1" in
   listremotes) printf 'tst:\n'; exit 0 ;;
   about) exit "${STUB_ABOUT_RC:-0}" ;;
-  lsf) printf 'RCLONE_TEST\n'; exit 0 ;;
+  lsf)
+      case " $* " in
+        *" --max-depth "*)
+            [ -n "${STUB_TOP_LEVEL:-}" ] && printf '%s\n' "$STUB_TOP_LEVEL"
+            exit 0 ;;
+      esac
+      printf 'RCLONE_TEST\n'; exit 0 ;;
   touch) exit 0 ;;
+  purge)
+      [ -n "${STUB_PURGE_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_PURGE_LOG"
+      exit 0 ;;
+  size)
+      # Conteggio diverso per lato: utile per bisync_damage_analysis.
+      case "$2" in
+        *src*) printf '{"count":%s}\n' "${STUB_SIZE_LOCAL:-0}" ;;
+        *)     printf '{"count":%s}\n' "${STUB_SIZE_REMOTE:-0}" ;;
+      esac
+      exit 0 ;;
   bisync|sync)
       n=$(cat "${COUNT_FILE:-/dev/null}" 2>/dev/null || echo 0)
       n=$((n + 1))
       echo "$n" > "${COUNT_FILE:-/dev/null}"
+      [ -n "${STUB_ERROR_TEXT:-}" ] && printf '%s\n' "$STUB_ERROR_TEXT" >&2
       if [ "${STUB_FAIL_ALWAYS:-0}" != "0" ]; then exit "$STUB_FAIL_ALWAYS"; fi
       if [ "${STUB_FAIL_FIRST:-0}" = "1" ] && [ "$n" -eq 1 ]; then exit 7; fi
       sleep "${STUB_SLEEP:-0}"
@@ -180,6 +208,9 @@ EOS
     export RCLONE_CONFIG_DIR="$TEST_TMP/conf"
     export RCLONE_EXCLUDE_FILE="$TEST_TMP/conf/exclude_patterns.txt"
     export NOTIFY_ENABLED=0
+
+    # Il file di esclusione è obbligatorio: gli entrypoint lo validano.
+    printf '.git/\n*.tmp\n' > "$RCLONE_EXCLUDE_FILE"
 
     cat > "$TEST_TMP/stub_bisync.sh" <<EOS
 #!/bin/bash

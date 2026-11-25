@@ -8,6 +8,9 @@
 #
 # I pattern sono relativi alla radice di ogni albero: la cartella locale
 # (Path1) e il remote (Path2) di bisync, sorgente e destinazione di sync.
+#
+# ATTENZIONE: modificare questo file richiede un --resync. Lo script lo rileva
+# da solo (firma dei filtri salvata in state/) e lo esegue automaticamente.
 
 Google AI Studio/
 Gemini Gems/
@@ -17,3 +20,14 @@ Voyager Data/
 # Senza slash iniziale il pattern vale a qualsiasi livello dell'albero, quindi
 # copre sia la radice sia le sottocartelle (vault Obsidian incluso).
 .git/
+**/.git/**
+
+# File temporanei e di sistema: mai sincronizzati.
+*.tmp
+*.part
+*.partial
+*.crdownload
+.~lock.*
+.DS_Store
+Thumbs.db
+desktop.ini

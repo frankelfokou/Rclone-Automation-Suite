@@ -1,0 +1,25 @@
+# Esclusioni aggiuntive per l'istanza bisync del vault Obsidian (GDrive-Pro).
+# Vengono passate a rclone con un secondo --exclude-from, in aggiunta a
+# exclude_patterns.txt.
+#
+# Scopo: sincronizzare solo i file stabili del vault. Lo stato volatile di
+# Obsidian cambia in continuazione (finestra attiva, scroll, pannelli aperti)
+# e ogni scrittura innescherebbe una sincronizzazione inutile, generando un
+# conflitto a ogni run.
+#
+# ATTENZIONE: modificare questo file richiede un --resync (automatico).
+
+# Stato dell'interfaccia: cambia a ogni apertura/chiusura del vault.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+**/.obsidian/workspace.json
+**/.obsidian/workspace-mobile.json
+
+# Cestino interno del vault.
+.trash/
+**/.trash/**
+
+# Cache e file temporanei delle applicazioni.
+.obsidian/cache/
+.obsidian/plugins/*/data.json.bak
+**/.obsidian/cache/**

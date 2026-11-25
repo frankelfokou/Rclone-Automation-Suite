@@ -1,0 +1,11 @@
+[Unit]
+Description=Rotazione dei log rclone (livello utente)
+Documentation=man:logrotate(8)
+# logrotate di sistema non riesce a leggere i log nella home (ACL other::---
+# su /home/frankel e SELinux): la rotazione gira come utente.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logrotate --state %h/.local/state/rclone-logrotate.status %h/.config/rclone/logrotate.conf
+Nice=19
+IOSchedulingClass=idle

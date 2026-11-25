@@ -1,6 +1,10 @@
 #!/bin/bash
-# Test di utility/rclone_watch_bisync.sh: debounce, gate lsof, eventi in coda,
-# backoff, blocco critico e cleanup.
+# Test di rclone_watch_bisync.sh: debounce, gate lsof, eventi in coda,
+# retry automatico con backoff, eventi transitori ignorati e cleanup.
+#
+# Il watcher non si sospende più per un errore di bisync: il cooldown è
+# gestito da rclone_bisync.sh tramite il marker .blocked, che qui viene solo
+# letto. Questi test verificano che resti vivo e che ritenti da solo.
 
 set -u
 . "$(dirname "$0")/lib/testlib.sh"
@@ -21,6 +25,8 @@ start_watcher() { # $1 = debounce
     MIN_INTERVAL="${MIN_INTERVAL:-0}" \
     LSOF_POLL=0.2 \
     LSOF_MAX_WAIT=30 \
+    BACKOFF_START="${BACKOFF_START:-2}" \
+    BACKOFF_MAX="${BACKOFF_MAX:-2}" \
     STUB_BISYNC_SLEEP="${STUB_BISYNC_SLEEP:-0}" \
     STUB_BISYNC_RC="${STUB_BISYNC_RC:-0}" \
     "$WATCH" "$SRC" "tst:" "$1" >> "$TEST_TMP/logs/watch.out" 2>&1 &
@@ -37,10 +43,17 @@ stop_watcher() {
     fi
 }
 
-printf '\n-- prerequisiti e blocco --\n'
+printf '\n-- prerequisiti --\n'
+# Con il marker presente il watcher resta vivo: sarà rclone_bisync.sh a
+# decidere quando ritentare (cooldown), non il watcher a fermarsi.
 : > "$BLOCKED"
-"$WATCH" "$SRC" "tst:" 1 >/dev/null 2>&1
-assert_eq 75 "$?" "marker bloccato -> 75"
+start_watcher 1
+if kill -0 "$WATCH_PID" 2>/dev/null; then
+    pass "marker .blocked non ferma il watcher"
+else
+    fail "marker .blocked non ferma il watcher"
+fi
+stop_watcher
 rm -f "$BLOCKED"
 
 "$WATCH" "$TEST_TMP/nope" "tst:" 1 >/dev/null 2>&1
@@ -94,21 +107,59 @@ sleep 4
 assert_eq 1 "$(count_lines "$CALLS")" "5 scritture ravvicinate -> una sola run"
 stop_watcher
 
-printf '\n-- errore critico --\n'
+printf '\n-- eventi transitori ignorati --\n'
+rm -f "$CALLS" "$LOG"
+mkdir -p "$SRC/.obsidian"
+start_watcher 1
+
+echo '{"stato":"volatile"}' > "$SRC/.obsidian/workspace.json"
+sleep 3
+assert_eq 0 "$(count_lines "$CALLS")" "workspace.json non innesca una run"
+
+echo "vero" >> "$SRC/vero.txt"
+sleep 3
+assert_eq 1 "$(count_lines "$CALLS")" "un file vero innesca la run"
+stop_watcher
+
+printf '\n-- retry automatico dopo un errore --\n'
 rm -f "$CALLS" "$LOG" "$BLOCKED"
+STUB_BISYNC_RC=1 BACKOFF_START=2 BACKOFF_MAX=2 start_watcher 1
+
+echo "retry" >> "$SRC/retry.txt"
+sleep 12
+
+if [ "$(count_lines "$CALLS")" -ge 2 ]; then
+    pass "dopo un errore il watcher ritenta da solo (senza nuovi eventi)"
+else
+    fail "dopo un errore il watcher ritenta da solo (senza nuovi eventi)" \
+        "chiamate=$(count_lines "$CALLS")"
+fi
+if kill -0 "$WATCH_PID" 2>/dev/null; then
+    pass "il watcher resta attivo dopo un errore"
+else
+    fail "il watcher resta attivo dopo un errore"
+fi
+stop_watcher
+
+printf '\n-- cooldown letto dal marker --\n'
+rm -f "$CALLS" "$LOG" "$BLOCKED"
+# Marker con retry lontano: il watcher deve rispettarlo e restare vivo.
+printf 'reason=test\nretry_after=%s\nattempts=1\n' "$(( $(date +%s) + 3600 ))" > "$BLOCKED"
 STUB_BISYNC_RC=7 start_watcher 1
-
-echo "critico" >> "$SRC/critical.txt"
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    kill -0 "$WATCH_PID" 2>/dev/null || break
-    sleep 1
-done
-
-wait "$WATCH_PID" 2>/dev/null
-rc=$?
-WATCH_PID=""
-assert_eq 7 "$rc" "exit 7 propagato dal watcher"
-assert_exists "$BLOCKED" "marker creato su errore critico"
+echo "cooldown" >> "$SRC/cooldown.txt"
+sleep 5
+if [ "$(count_lines "$CALLS")" -eq 1 ]; then
+    pass "una sola chiamata: il cooldown viene rispettato"
+else
+    fail "una sola chiamata: il cooldown viene rispettato" \
+        "chiamate=$(count_lines "$CALLS")"
+fi
+if kill -0 "$WATCH_PID" 2>/dev/null; then
+    pass "il watcher attende il cooldown senza uscire"
+else
+    fail "il watcher attende il cooldown senza uscire"
+fi
+stop_watcher
 rm -f "$BLOCKED"
 
 printf '\n-- cleanup --\n'

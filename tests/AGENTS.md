@@ -22,12 +22,13 @@ Il runner termina con codice `0` se tutti i test passano, `1` altrimenti. Ogni t
 
 | File | Cosa verifica |
 |---|---|
-| `test_00_static.sh` | presenza file, `bash -n`, contenuto delle unità systemd, file `.env`, riferimenti a `scripts/` e `config/`, assenza di `utility/`, `legacy/`, `docs/`, presenza di `scripts/lib/common.sh`, `systemd-analyze verify` |
+| `test_00_static.sh` | presenza file, `bash -n`, contenuto delle unità systemd, file `.env`, flag di auto-riparazione e di protezione delle cancellazioni, riferimenti a `scripts/` e `config/`, assenza di `utility/`, `legacy/`, `docs/`, presenza di `scripts/lib/common.sh`, `systemd-analyze verify` |
 | `test_05_common.sh` | contratti di `scripts/lib/common.sh`: costanti di exit, validazione dei path, percorsi e preparazione delle directory, `run_rclone`, marker `.blocked`, gate `lsof`, controlli su remote e filesystem locale, formato di log e di notifica (livelli, multiriga, soglia `NOTIFY_MIN_LEVEL`) |
 | `test_10_bisync.sh` | validazione argomenti, remote non configurato, directory mancante, lock 201/200, file aperti, run normale, exit 1, exit 7 con resync ok/ko, connettività, log |
-| `test_15_sync.sh` | validazione argomenti, run normale, lock 201/200, errore rclone, remote irraggiungibile |
-| `test_20_watcher.sh` | marker bloccato, directory mancante, gate `lsof`, ripresa alla chiusura, evento durante la run, debounce, exit 7, cleanup di FIFO e `inotifywait` |
-| `test_30_setup_contract.sh` | contratto di `setup.sh`/`unsetup.sh`: directory, installazione e rimozione di `config/exclude_patterns.txt`, `RCLONE_TEST`, logrotate watcher, unità, linger, script, modulo `lib/common.sh` e pulizia delle righe cron legacy |
+| `test_15_sync.sh` | validazione argomenti, run normale, lock 201/202, errori classificati, cancellazioni oltre soglia, presenza di `--max-delete` e `--backup-dir` |
+| `test_20_watcher.sh` | gate `lsof`, ripresa alla chiusura, evento durante la run, debounce, eventi transitori ignorati (`workspace.json`), retry automatico senza nuovi eventi, rispetto del cooldown, cleanup di FIFO e `inotifywait` |
+| `test_25_healing.sh` | classificazione degli errori (`too_many_deletes`, `retryable`, `auth`, `rate_limit`, `network`, `critical`, `other`), cooldown 15m/1h/6h/24h, firma dei filtri, analisi del danno, merge newest-wins, guard e quarantena, deduplica delle notifiche, assenza di auto-innesco |
+| `test_30_setup_contract.sh` | contratto di `setup.sh`/`unsetup.sh`: directory, file di esclusione, `RCLONE_TEST`, rimozione dei wrapper legacy, logrotate utente, unità, linger, script, modulo `lib/common.sh` e pulizia delle righe cron legacy |
 | `test_40_flags.sh` | `--conflict-resolve newer`, `--resync-mode newer` e fallback con mtime uguali su coppia locale |
 
 I test dei moduli copiano i file reali (`scripts/lib/common.sh` più l'entrypoint da testare) in una directory temporanea e sovrascrivono `RCLONE_BIN`, `RCLONE_CONFIG_DIR` e `NOTIFY_ENABLED`: nessun `sed` sui sorgenti, quindi il codice verificato è quello che finisce in `~/.bin`.

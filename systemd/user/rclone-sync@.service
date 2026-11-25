@@ -8,8 +8,11 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-sync-%i.env
 ExecStart=/home/frankel/.bin/rclone_sync.sh ${SOURCE_PATH} ${DEST_PATH}
-# Nessun restart: Type=oneshot esce quando finisce
-# I lock flock negli script prevengono esecuzioni simultanee
+# 75 = rinvio (rete assente, quota, lock occupato): non è un guasto.
+SuccessExitStatus=75
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=6h
 
 [Install]
 WantedBy=timers.target

@@ -8,12 +8,15 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-bisync-%i.env
 Environment=MIN_INTERVAL=45 LSOF_POLL=2 LSOF_MAX_WAIT=1800 BACKOFF_START=10 BACKOFF_MAX=300
+Environment=BISYNC_SCRIPT=/home/frankel/.bin/rclone_bisync.sh
 ExecStart=/home/frankel/.bin/rclone_watch_bisync.sh ${LOCAL_PATH} ${REMOTE_PATH} 15
-# on-failure + SuccessExitStatus=75: se il watcher è sospeso (75) non viene
-# riavviato in loop; riparte solo per errori imprevisti.
-Restart=on-failure
+# Il watcher non si ferma mai per un errore di sincronizzazione: il cooldown
+# è gestito da rclone_bisync.sh. Riavvio solo se inotifywait termina.
+Restart=always
 RestartSec=10
-SuccessExitStatus=75
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 
 [Install]
 WantedBy=default.target

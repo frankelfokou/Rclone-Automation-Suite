@@ -8,10 +8,16 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=-/home/frankel/.config/systemd/user/rclone-bisync-%i.env
 ExecStart=/home/frankel/.bin/rclone_bisync.sh ${LOCAL_PATH} ${REMOTE_PATH}
-# 75 = EX_TEMPFAIL: rinvio (file aperti o lock occupato), non un fallimento
-SuccessExitStatus=75
-# Nessun restart: Type=oneshot esce quando finisce
-# I lock flock negli script prevengono esecuzioni simultanee
+# 75 = EX_TEMPFAIL: rinvio (file aperti, lock occupato, rete assente).
+# 7  = blocco con cooldown: il run è rimandato, non è un guasto del servizio.
+# Il marker .blocked contiene l'ora del nuovo tentativo automatico.
+SuccessExitStatus=75 7
+# Il lavoro pesante non deve mai contendere la CPU con l'utente.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Un run bloccato non deve restare appeso per sempre.
+TimeoutStartSec=2h
 
 [Install]
 WantedBy=timers.target

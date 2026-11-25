@@ -1,0 +1,13 @@
+[Unit]
+Description=Timer per la rotazione dei log rclone (livello utente)
+Documentation=man:logrotate(8)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+AccuracySec=1min
+Persistent=true
+Unit=rclone-logrotate.service
+
+[Install]
+WantedBy=timers.target

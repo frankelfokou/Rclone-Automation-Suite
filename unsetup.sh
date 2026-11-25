@@ -28,6 +28,7 @@ sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user stop 
     rclone-bisync@gdrive-pro.timer \
     rclone-sync@f4frank-to-mega.timer \
     rclone-sync@pro-to-mega.timer \
+    rclone-logrotate.timer \
     rclone-sync@drive-to-drive.timer \
     rclone-sync@drive-to-mega.timer 2>/dev/null || true
 
@@ -37,6 +38,7 @@ sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user disab
     rclone-bisync@gdrive-pro.timer \
     rclone-sync@f4frank-to-mega.timer \
     rclone-sync@pro-to-mega.timer \
+    rclone-logrotate.timer \
     rclone-sync@drive-to-drive.timer \
     rclone-sync@drive-to-mega.timer 2>/dev/null || true
 
@@ -57,23 +59,14 @@ done
 LOGROTATE_DIR="/etc/logrotate.d"
 
 echo "Rimozione file di logrotate da ${LOGROTATE_DIR}..."
-for instance in bisync_gdrive-f4frank bisync_gdrive-pro watcher_gdrive-f4frank watcher_gdrive-pro \
-                sync_f4frank-to-mega sync_pro-to-mega \
-                sync_drive-to-drive sync_drive-to-mega; do
-    logrotate_file="${LOGROTATE_DIR}/rclone_${instance}"
-    if [ -f "$logrotate_file" ]; then
-        rm -f "$logrotate_file" && echo "  Rimosso: $logrotate_file"
-    fi
-done
+# Le definizioni di sistema non funzionavano (ACL/SELinux) e alcune erano
+# duplicate: la rotazione è a livello utente, quindi si rimuove tutto.
+rm -f "${LOGROTATE_DIR}"/rclone_* 2>/dev/null || true
+echo "  Definizioni rclone rimosse da ${LOGROTATE_DIR}"
 
-# Pulizia anche dei vecchi file logrotate con il naming convention precedente
-# (prima che la gestione logrotate fosse spostata da setup/unsetup)
-for old_file in rclone_bisync_GDrive-F4Frank rclone_sync_GDrive-F4Frank; do
-    old_logrotate_file="${LOGROTATE_DIR}/${old_file}"
-    if [ -f "$old_logrotate_file" ]; then
-        rm -f "$old_logrotate_file" && echo "  Rimosso (vecchio naming): $old_logrotate_file"
-    fi
-done
+echo "Rimozione della configurazione logrotate utente..."
+rm -f "$HOME_DIR/.config/rclone/logrotate.conf"
+rm -f "$HOME_DIR/.local/state/rclone-logrotate.status"
 
 # Rimuove eventuali marker di blocco lasciati dai watcher
 rm -f "$HOME_DIR/.config/rclone/conf_dir_GDrive-F4Frank/lock_files/"*.blocked 2>/dev/null || true
@@ -96,6 +89,8 @@ rm -f "${SYSTEMD_USER_FOLDER}/rclone-sync@.service"
 rm -f "${SYSTEMD_USER_FOLDER}/rclone-bisync@.timer"
 rm -f "${SYSTEMD_USER_FOLDER}/rclone-sync@.timer"
 rm -f "${SYSTEMD_USER_FOLDER}/rclone-bisync-watcher@.service"
+rm -f "${SYSTEMD_USER_FOLDER}/rclone-logrotate.service"
+rm -f "${SYSTEMD_USER_FOLDER}/rclone-logrotate.timer"
 rm -f "${SYSTEMD_USER_FOLDER}/rclone-bisync-*.env"
 rm -f "${SYSTEMD_USER_FOLDER}/rclone-sync-*.env"
 
@@ -121,15 +116,17 @@ rmdir "$BIN_FOLDER/lib" 2>/dev/null || true
 # 6b. Rimozione del file di esclusione installato da setup.sh
 # =============================================================================
 
-echo "Rimozione del file di esclusione da $HOME_DIR/.config/rclone..."
-EXCLUDE_FILE="$HOME_DIR/.config/rclone/exclude_patterns.txt"
-if [ -f "${EXCLUDE_FILE}.bak" ]; then
-    mv -f "${EXCLUDE_FILE}.bak" "$EXCLUDE_FILE"
-    echo "  Ripristinata la versione precedente da ${EXCLUDE_FILE}.bak"
-elif [ -f "$EXCLUDE_FILE" ]; then
-    rm -f "$EXCLUDE_FILE"
-    echo "  Rimosso: $EXCLUDE_FILE"
-fi
+echo "Rimozione dei file di esclusione da $HOME_DIR/.config/rclone..."
+for exclude_name in exclude_patterns.txt exclude_obsidian.txt; do
+    EXCLUDE_FILE="$HOME_DIR/.config/rclone/${exclude_name}"
+    if [ -f "${EXCLUDE_FILE}.bak" ]; then
+        mv -f "${EXCLUDE_FILE}.bak" "$EXCLUDE_FILE"
+        echo "  Ripristinata la versione precedente da ${EXCLUDE_FILE}.bak"
+    elif [ -f "$EXCLUDE_FILE" ]; then
+        rm -f "$EXCLUDE_FILE"
+        echo "  Rimosso: $EXCLUDE_FILE"
+    fi
+done
 
 # =============================================================================
 # 7. Rimozione wrapper da /etc/cron.daily/

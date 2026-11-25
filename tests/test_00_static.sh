@@ -40,24 +40,34 @@ for unit in \
     systemd/user/rclone-bisync@.timer \
     systemd/user/rclone-sync@.service \
     systemd/user/rclone-sync@.timer \
-    systemd/user/rclone-bisync-watcher@.service
+    systemd/user/rclone-bisync-watcher@.service \
+    systemd/user/rclone-logrotate.service \
+    systemd/user/rclone-logrotate.timer
 do
     assert_exists "$REPO_ROOT/$unit" "esiste $unit"
 done
 
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync@.service" \
     "SuccessExitStatus=75" "bisync service considera 75 un successo"
+assert_contains "$REPO_ROOT/systemd/user/rclone-bisync@.service" \
+    "SuccessExitStatus=75 7" "bisync service considera 7 un rinvio con cooldown"
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync@.timer" \
-    "OnUnitActiveSec=2min" "timer bisync a 2 minuti"
+    "OnUnitActiveSec=5min" "timer bisync a 5 minuti"
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync@.timer" \
     "AccuracySec=10s" "timer bisync con AccuracySec"
+assert_not_contains "$REPO_ROOT/systemd/user/rclone-bisync@.timer" \
+    "Persistent=true" "timer bisync senza Persistent (OnUnitActiveSec)"
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-watcher@.service" \
-    "Restart=on-failure" "watcher con Restart=on-failure"
+    "Restart=always" "watcher con Restart=always"
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-watcher@.service" \
-    "SuccessExitStatus=75" "watcher considera 75 un successo"
+    "BISYNC_SCRIPT=/home/frankel/.bin/rclone_bisync.sh" "watcher con BISYNC_SCRIPT"
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-watcher@.service" \
     "rclone_watch_bisync.sh \${LOCAL_PATH} \${REMOTE_PATH} 15" \
     "watcher con debounce 15"
+assert_contains "$REPO_ROOT/systemd/user/rclone-logrotate.service" \
+    "logrotate --state" "logrotate utente con file di stato"
+assert_contains "$REPO_ROOT/systemd/user/rclone-logrotate.timer" \
+    "Unit=rclone-logrotate.service" "timer logrotate punta al servizio"
 
 printf '\n-- file .env --\n'
 assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-gdrive-f4frank.env" \
@@ -80,9 +90,22 @@ assert_absent "$REPO_ROOT/systemd/user/rclone-sync-drive-to-drive.env" \
     "env F4Frank -> GDrive-Pro rimosso"
 assert_absent "$REPO_ROOT/systemd/user/rclone-sync-drive-to-mega.env" \
     "env drive-to-mega legacy rimosso"
+assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-gdrive-pro.env" \
+    "GUARD_ALLOWED_TOP_LEVEL=Obsidian" "env pro dichiara l'invariante del vault"
+assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-gdrive-pro.env" \
+    "RCLONE_EXCLUDE_EXTRA=" "env pro usa il file di esclusione Obsidian"
+assert_contains "$REPO_ROOT/systemd/user/rclone-bisync-gdrive-f4frank.env" \
+    "GUARD_FORBIDDEN_TOP_LEVEL=Obsidian" "env f4frank vieta il vault"
+assert_contains "$REPO_ROOT/systemd/user/rclone-sync-f4frank-to-mega.env" \
+    "SYNC_MAX_DELETE=" "env sync limita le cancellazioni"
 
 printf '\n-- struttura e riferimenti --\n'
 assert_exists "$REPO_ROOT/config/exclude_patterns.txt" "esiste config/exclude_patterns.txt"
+assert_exists "$REPO_ROOT/config/exclude_obsidian.txt" "esiste config/exclude_obsidian.txt"
+assert_contains "$REPO_ROOT/config/exclude_obsidian.txt" "workspace.json" \
+    "le esclusioni Obsidian coprono workspace.json"
+assert_contains "$REPO_ROOT/config/exclude_obsidian.txt" ".trash/" \
+    "le esclusioni Obsidian coprono il cestino interno"
 assert_exists "$REPO_ROOT/tests/run_all.sh" "esiste tests/run_all.sh"
 assert_absent "$REPO_ROOT/utility" "la vecchia directory utility/ è stata rimossa"
 assert_absent "$REPO_ROOT/test" "la vecchia directory test/ è stata rimossa"
@@ -129,6 +152,36 @@ assert_contains "$REPO_ROOT/setup.sh" 'scripts/lib/common.sh' \
 assert_contains "$REPO_ROOT/unsetup.sh" 'lib/common.sh' \
     "unsetup.sh rimuove il modulo comune"
 
+printf '\n-- auto-riparazione e protezioni --\n'
+assert_contains "$REPO_ROOT/scripts/rclone_bisync.sh" "--conflict-resolve newer" \
+    "bisync risolve i conflitti con la versione più recente"
+assert_contains "$REPO_ROOT/scripts/rclone_bisync.sh" "--resync-mode" \
+    "bisync sceglie il lato da cui ripristinare"
+assert_contains "$REPO_ROOT/scripts/lib/common.sh" "classify_bisync_failure" \
+    "il modulo classifica gli errori"
+assert_contains "$REPO_ROOT/scripts/lib/common.sh" "bisync_damage_analysis" \
+    "il modulo analizza il danno"
+assert_contains "$REPO_ROOT/scripts/lib/common.sh" "guard_enforce" \
+    "il modulo applica gli invarianti delle coppie"
+assert_contains "$REPO_ROOT/scripts/lib/common.sh" "blocked_is_due" \
+    "il blocco ha un cooldown con ritentativo"
+assert_contains "$REPO_ROOT/scripts/lib/common.sh" "filters_signature" \
+    "la firma dei filtri forza il resync"
+assert_not_contains "$REPO_ROOT/scripts/lib/common.sh" 'RCLONE_TEST_WRITE' \
+    "check_local_write non scrive nell'albero sincronizzato"
+assert_contains "$REPO_ROOT/scripts/rclone_sync.sh" "--max-delete" \
+    "il backup limita le cancellazioni"
+assert_contains "$REPO_ROOT/scripts/rclone_sync.sh" "--backup-dir" \
+    "il backup conserva i file rimossi"
+assert_contains "$REPO_ROOT/scripts/rclone_watch_bisync.sh" "--exclude" \
+    "il watcher ignora gli eventi transitori"
+assert_contains "$REPO_ROOT/setup.sh" "wrapper_sync_drive_to_drive.sh" \
+    "setup rimuove il wrapper che cancellava il vault"
+assert_contains "$REPO_ROOT/setup.sh" "wrapper_sync_drive_to_mega.sh" \
+    "setup rimuove il wrapper che cancellava il backup"
+assert_contains "$REPO_ROOT/setup.sh" "rclone-logrotate.timer" \
+    "setup abilita la rotazione dei log utente"
+
 printf '\n-- formato di log e notifiche --\n'
 assert_contains "$REPO_ROOT/scripts/lib/common.sh" '[%s] [%s] [%s] %s' \
     "il modulo definisce il formato standard dei record"
@@ -160,7 +213,9 @@ if command -v systemd-analyze >/dev/null 2>&1; then
         "$REPO_ROOT/systemd/user/rclone-bisync@.timer" \
         "$REPO_ROOT/systemd/user/rclone-sync@.service" \
         "$REPO_ROOT/systemd/user/rclone-sync@.timer" \
-        "$REPO_ROOT/systemd/user/rclone-bisync-watcher@.service" 2>&1 \
+        "$REPO_ROOT/systemd/user/rclone-bisync-watcher@.service" \
+        "$REPO_ROOT/systemd/user/rclone-logrotate.service" \
+        "$REPO_ROOT/systemd/user/rclone-logrotate.timer" 2>&1 \
         | grep -v 'is not executable' \
         | grep -v '^$')
     if [ -z "$verify_out" ]; then
