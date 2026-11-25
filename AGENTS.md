@@ -454,7 +454,7 @@ Le liste sono separate da `|` per permettere voci con spazi.
 
 **Notifiche deduplicate** (`notify_event` / `notify_clear`): ogni evento ha una chiave (`damage`, `critical`, `guard`, `blocked`, `streak`, `sync_error`, ...). Lo stesso messaggio non viene notificato due volte; quando lo stato torna sano la chiave viene azzerata e una nuova occorrenza torna visibile.
 
-**Protezione del backup**: `rclone_sync.sh` rifiuta di scrivere su un remote gestito da bisync (`SYNC_PROTECTED_DESTS`, default `GDrive-F4Frank|GDrive-Pro`). È la rete di sicurezza contro i vecchi wrapper in `/etc/cron.daily` che sincronizzavano `GDrive-F4Frank: → GDrive-Pro:`. In più `--max-delete 200` blocca le cancellazioni di massa e `--backup-dir Mega:_rclone-backup/<REMOTE>` conserva ciò che viene rimosso.
+**Protezione del backup**: `rclone_sync.sh` rifiuta di scrivere su un remote gestito da bisync o sulla radice del backup (`SYNC_PROTECTED_DESTS`, default `GDrive-F4Frank|GDrive-Pro|Mega:`). È la rete di sicurezza contro i vecchi wrapper in `/etc/cron.daily` che sincronizzavano `GDrive-F4Frank: → GDrive-Pro:` e `GDrive-F4Frank: → Mega:`. In più `--max-delete 200` blocca le cancellazioni di massa e `--backup-dir Mega:_rclone-backup/<REMOTE>` conserva ciò che viene rimosso.
 
 ---
 
@@ -684,7 +684,7 @@ Esegue `rclone sync "$SOURCE_PATH" "$DEST_PATH"` tra due remote, con lock su **e
 
 **Protezioni:**
 
-- `SYNC_PROTECTED_DESTS` (default `GDrive-F4Frank|GDrive-Pro`): rifiuta di scrivere su un remote gestito da bisync. È la rete di sicurezza contro un `rclone sync GDrive-F4Frank: GDrive-Pro:` lasciato in cron, che cancellerebbe il vault.
+- `SYNC_PROTECTED_DESTS` (default `GDrive-F4Frank|GDrive-Pro|Mega:`): rifiuta di scrivere su un remote gestito da bisync o sulla radice del backup. È la rete di sicurezza contro i due wrapper rimasti in `/etc/cron.daily` (`GDrive-F4Frank: GDrive-Pro:` che cancellava il vault e `GDrive-F4Frank: Mega:` che cancellava i backup): entrambi ora escono con `1` senza toccare nulla.
 - `--max-delete "$SYNC_MAX_DELETE"` (default 200): oltre la soglia il run viene abortito e il backup resta intatto.
 - `--backup-dir <DEST>:_rclone-backup/<REMOTE>`: i file sostituiti o rimossi vengono spostati lì invece di essere eliminati; la cartella è fuori dall'albero di destinazione per non essere risincronizzata su sé stessa.
 

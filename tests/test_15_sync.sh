@@ -63,6 +63,12 @@ assert_eq 1 "$?" "cancellazioni oltre soglia -> 1 (backup intatto)"
 assert_contains "$LOG" "Cancellazioni bloccate" \
     "il blocco delle cancellazioni è registrato"
 
+printf '\n-- destinazione protetta --\n'
+SYNC_PROTECTED_DESTS=tst "$SYNC" "tst:" "tst:" >/dev/null 2>&1
+assert_eq 1 "$?" "destinazione protetta -> 1 (nessun file toccato)"
+assert_contains "$LOG" "Destinazione rifiutata" \
+    "il rifiuto è registrato come CRITICAL"
+
 printf '\n-- protezione delle cancellazioni --\n'
 assert_contains "$REPO_ROOT/scripts/rclone_sync.sh" '--max-delete "$SYNC_MAX_DELETE"' \
     "il comando usa la soglia di cancellazione"

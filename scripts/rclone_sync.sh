@@ -38,9 +38,12 @@ NOTIFY_APP="Rclone Script"
 SYNC_MAX_DELETE="${SYNC_MAX_DELETE:-200}"
 
 # Un backup unidirezionale non deve mai scrivere su un remote gestito in
-# bidirezionale da bisync: è esattamente ciò che il 10/11 ha svuotato il vault
-# (rclone sync GDrive-F4Frank: GDrive-Pro:). Elenco separato da '|'.
-SYNC_PROTECTED_DESTS="${SYNC_PROTECTED_DESTS:-GDrive-F4Frank|GDrive-Pro}"
+# bidirezionale da bisync, né sulla radice del backup: è esattamente ciò che
+# il 10/11 ha svuotato il vault (rclone sync GDrive-F4Frank: GDrive-Pro:) e
+# ogni notte ha cancellato i backup (rclone sync GDrive-F4Frank: Mega:).
+# Le voci (separate da '|') corrispondono al nome del remote oppure al
+# percorso di destinazione completo.
+SYNC_PROTECTED_DESTS="${SYNC_PROTECTED_DESTS:-GDrive-F4Frank|GDrive-Pro|Mega:}"
 SYNC_ALLOW_PROTECTED_DEST="${SYNC_ALLOW_PROTECTED_DEST:-0}"
 
 require_args "$#" 2 "$USAGE"
@@ -61,12 +64,13 @@ require_exclude_files
 # wrapper in cron potrebbe cancellare il vault.
 if [ "$SYNC_ALLOW_PROTECTED_DEST" != "1" ]; then
     IFS='|' read -r -a _protected <<< "$SYNC_PROTECTED_DESTS"
+    DEST_NORMALIZED="${DEST_PATH%/}"
     for _name in "${_protected[@]}"; do
-        if [ "$DEST_REMOTE_NAME" = "$_name" ]; then
-            log_critical "Destinazione rifiutata: '${DEST_REMOTE_NAME}' è gestito da bisync."
-            log_critical "Un sync unidirezionale qui cancellerebbe il lato remoto. Operazione annullata."
+        if [ "$DEST_REMOTE_NAME" = "$_name" ] || [ "$DEST_NORMALIZED" = "${_name%/}" ]; then
+            log_critical "Destinazione rifiutata: '${DEST_PATH}' non è una destinazione valida per un sync unidirezionale."
+            log_critical "Un sync qui cancellerebbe il lato remoto o i backup. Operazione annullata, nessun file toccato."
             notify_event sync_protected CRITICAL \
-                "Backup annullato: la destinazione ${DEST_REMOTE_NAME} è una coppia bidirezionale. Nessun file è stato toccato."
+                "Backup annullato: la destinazione ${DEST_PATH} è protetta (coppia bidirezionale o radice del backup). Nessun file è stato toccato. Rimuovi il job che lo invoca: /etc/cron.daily/wrapper_sync_drive_to_*.sh"
             exit "$EXIT_ERROR"
         fi
     done
